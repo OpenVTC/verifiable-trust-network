@@ -38,6 +38,7 @@ pub struct Settings {
     pub grant_validity: Duration,
     pub roles: Vec<RoleDef>,
     pub relay: RelayConfig,
+    pub directory: crate::config::DirectoryConfig,
 }
 
 pub struct Network {
@@ -49,6 +50,9 @@ pub struct Network {
     pub(crate) status: StatusChecker,
     pub(crate) http: reqwest::Client,
     pub(crate) settings: Settings,
+    pub(crate) directory: crate::config::DirectoryConfig,
+    pub(crate) index_cache:
+        Mutex<std::collections::HashMap<String, (DateTime<Utc>, vtn_core::index::NetworkIndex)>>,
     pub(crate) write: Mutex<()>,
 }
 
@@ -75,7 +79,9 @@ impl Network {
             resolver,
             status,
             http,
+            directory: settings.directory.clone(),
             settings,
+            index_cache: Mutex::default(),
             write: Mutex::new(()),
         }
     }

@@ -23,6 +23,7 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 - **service**: required roles. A party must register a group for each `required` role before its acknowledgement is accepted. Groups are revoked and dropped when a member departs or is removed.
 - **service**: cascading broadcast to a role. Delivery goes to every current member's registered group. A network group relays into its own members' groups, so no network learns another's roster. Repeats are dropped by message id (which also breaks cycles), deliveries from networks this one is not a member of are refused, and a hop limit applies. Receipts are aggregated back up the chain.
 - **service**: a person's membership credential is checked against the issuing community's status list at sign-in (A12 resolved).
+- **service**: federated directory search (`/v1/directory/federated`, the landing page's *Include member networks* toggle, and `nnm directory --federated`). Searches the signed indexes of acknowledged member networks, down to `[directory] federate_depth`. Every result carries its path, with each hop's own entry state, and unreachable members are reported as indeterminate (VTI-VTN-032/033, VTI-REG-012, A16).
 - **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
 ### Documentation

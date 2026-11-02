@@ -129,6 +129,9 @@ pub struct DirectoryConfig {
     /// Show member counts on the landing page even when the directory is restricted.
     #[serde(default = "default_true")]
     pub show_counts: bool,
+    /// How many levels of member networks a federated search follows. 0 disables it.
+    #[serde(default = "default_federate_depth")]
+    pub federate_depth: usize,
 }
 
 impl Default for DirectoryConfig {
@@ -136,8 +139,13 @@ impl Default for DirectoryConfig {
         Self {
             visibility: Visibility::default(),
             show_counts: true,
+            federate_depth: default_federate_depth(),
         }
     }
+}
+
+fn default_federate_depth() -> usize {
+    3
 }
 
 fn default_true() -> bool {

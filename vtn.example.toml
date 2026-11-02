@@ -29,6 +29,9 @@ grant_validity_days = 365
 visibility = "public"
 # Show member counts on the landing page even when the directory is restricted.
 show_counts = true
+# Levels of member networks a federated search follows (0 disables it). A member network
+# is reached at the `url` in its entry profile (`nnm profile <did> --url …`).
+federate_depth = 3
 
 # Roles members register groups for. A required role must have a registered group before
 # a party's acknowledgement (its membership) is accepted.

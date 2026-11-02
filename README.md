@@ -37,7 +37,6 @@ Phase 1 of the delivery plan, implemented:
 
 Not yet built (see the design's delivery plan):
 - the VTC-side network-membership module (acknowledge, register groups, relay to members)
-- federated search across nested networks
 - the graph UI
 - network data rooms
 - VTI roles and approvals
@@ -81,7 +80,7 @@ nnm status
 nnm entries [<did>]
 nnm list <did> --kind community|network [--label <label>] [--description …] [--url …] [--tag …]
 nnm profile <did> [--label …] [--description …] [--url …] [--tag …]
-nnm directory [terms…] [--kind community|network] [--members-only]
+nnm directory [terms…] [--kind community|network] [--members-only] [--federated]
 nnm token
 nnm roles
 nnm groups [--role admins]
@@ -103,6 +102,7 @@ nnm audit
 | GET | `/` | Landing page with the searchable directory |
 | GET | `/.well-known/vtn` | DID, profile and directory visibility |
 | GET | `/v1/directory?q=&kind=&state=&members_only=` | Directory search (visibility-gated) |
+| GET | `/v1/directory/federated?q=…` | Search including member networks' signed indexes; results carry their path |
 | GET | `/v1/directory/summary` | Member counts (public unless `show_counts = false`) |
 | GET | `/v1/index` | Signed index of published entries, each with `kind` and `acknowledged` |
 | GET | `/v1/graph` | DTG graph: nodes, and one edge per credential with its status |

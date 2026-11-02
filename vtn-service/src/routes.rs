@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/status/{purpose}", get(status_list))
         .route("/v1/directory", get(directory))
         .route("/v1/directory/summary", get(directory_summary))
+        .route("/v1/directory/federated", get(federated_directory))
         .route("/v1/index", get(index))
         .route("/v1/graph", get(public_graph))
         .route("/v1/credentials/{id}", get(credential))
@@ -182,6 +183,7 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
         "directory": {
             "visibility": s.directory.visibility,
             "showCounts": s.directory.show_counts,
+            "federateDepth": s.directory.federate_depth,
         },
         "links": {
             "directory": "/v1/directory",
@@ -211,6 +213,15 @@ async fn directory(
 ) -> ApiResult<Json<Vec<DirectoryEntry>>> {
     require_directory(&s, &who)?;
     Ok(Json(s.network.directory(&query).await?))
+}
+
+async fn federated_directory(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+    Query(query): Query<DirectoryQuery>,
+) -> ApiResult<Json<crate::federation::FederatedResult>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.federated_directory(&query).await?))
 }
 
 async fn directory_summary(

@@ -65,7 +65,7 @@ async fn live(name: &str, required_admins: bool, visibility: Visibility) -> Live
         membership: MembershipConfig::default(),
         directory: DirectoryConfig {
             visibility,
-            show_counts: true,
+            ..Default::default()
         },
         roles: vec![vtn_core::groups::RoleDef {
             name: "admins".into(),
@@ -564,4 +564,89 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
         sign_in(person, no_status).await.is_ok(),
         "validity window only"
     );
+}
+
+/// `parent` lists `child` with its URL, and `child` joins.
+async fn network_joins_at(parent: &Live, child: &Live, label: &str) {
+    parent
+        .admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": child.did, "kind": "network", "label": label, "url": child.url }),
+        )
+        .await
+        .unwrap();
+    child
+        .admin
+        .post("/v1/admin/memberships", &json!({ "url": parent.url }))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn federated_search_follows_member_networks_with_paths() {
+    let whn = live("WHN", false, Visibility::Public).await;
+    let au = live("Health-AU", false, Visibility::Public).await;
+    let nsw = live("Health-NSW", false, Visibility::Public).await;
+    let private = live("Private-Net", false, Visibility::Members).await;
+    network_joins_at(&whn, &au, "Health-AU").await;
+    network_joins_at(&au, &nsw, "Health-NSW").await;
+    network_joins_at(&whn, &private, "Private-Net").await;
+    nsw.admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": Identity::generate().did(), "kind": "community",
+                     "label": "St Vincent's Hospital", "tags": ["sydney"] }),
+        )
+        .await
+        .unwrap();
+    // Listed by WHN but never acknowledged: not followed.
+    let pending = live("Pending-Net", false, Visibility::Public).await;
+    whn.admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": pending.did, "kind": "network", "url": pending.url }),
+        )
+        .await
+        .unwrap();
+    pending
+        .admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": Identity::generate().did(), "kind": "community", "label": "Vincent Hidden" }),
+        )
+        .await
+        .unwrap();
+
+    let found = VtnClient::new(&whn.url)
+        .get("/v1/directory/federated?q=vincent")
+        .await
+        .unwrap();
+    let results = found["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{found:#}");
+    let stv = &results[0];
+    assert_eq!(stv["label"], "St Vincent's Hospital");
+    assert_eq!(stv["listedBy"], nsw.did);
+    assert_eq!(stv["acknowledged"], false, "NSW only lists it");
+    let path: Vec<&str> = stv["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["network"].as_str().unwrap())
+        .collect();
+    assert_eq!(path, [au.did.as_str(), nsw.did.as_str()]);
+
+    // The members-only network's index cannot be read: indeterminate, reported.
+    let unreachable = found["unreachable"].as_array().unwrap();
+    assert!(
+        unreachable.iter().any(|u| u["network"] == private.did),
+        "{found:#}"
+    );
+
+    // Plain (non-federated) search sees only WHN's own entries.
+    let own = VtnClient::new(&whn.url)
+        .get("/v1/directory?q=vincent")
+        .await
+        .unwrap();
+    assert!(own.as_array().unwrap().is_empty());
 }

@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{Entry, EntryKind, EntryState, Framework, NetworkProfile};
+use crate::model::{Entry, EntryKind, EntryProfile, EntryState, Framework, NetworkProfile};
 
 pub const INDEX_TYPE: &str = "VerifiableTrustNetworkIndex";
 
@@ -23,6 +23,10 @@ pub struct IndexEntry {
     pub acknowledged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The network's directory description of the entry. Searchable by a parent network, and
+    /// `url` is how a parent reaches a member network's own index.
+    #[serde(default)]
+    pub profile: EntryProfile,
     pub listing: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<Value>,
@@ -56,6 +60,7 @@ impl IndexEntry {
             state: entry.state,
             acknowledged: entry.state.is_membership(),
             label: entry.label.clone(),
+            profile: entry.profile.clone(),
             listing: entry.listing.credential.clone(),
             grant: entry.grant.as_ref().map(|g| g.credential.clone()),
             acknowledgement: entry.ack.clone(),

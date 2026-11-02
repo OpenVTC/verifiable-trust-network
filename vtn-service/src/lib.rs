@@ -9,6 +9,7 @@ pub mod auth;
 pub mod broadcast;
 pub mod config;
 pub mod error;
+pub mod federation;
 pub mod groups;
 pub mod identity;
 pub mod memberships;
@@ -101,6 +102,7 @@ pub async fn build_state_with(
             grant_validity: chrono::Duration::days(config.membership.grant_validity_days),
             roles: config.roles.clone(),
             relay: config.relay.clone(),
+            directory: config.directory.clone(),
         },
     );
     Ok(AppState {

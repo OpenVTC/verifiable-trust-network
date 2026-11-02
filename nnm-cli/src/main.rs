@@ -72,6 +72,9 @@ enum Command {
         /// Only acknowledged members.
         #[arg(long)]
         members_only: bool,
+        /// Also search member networks' indexes, showing the path to each result.
+        #[arg(long)]
+        federated: bool,
     },
     /// Print a session token, e.g. to open a restricted directory in the browser.
     Token,
@@ -511,6 +514,7 @@ async fn admin_command(
             query,
             kind,
             members_only,
+            federated,
         } => {
             let mut params = vec![format!("members_only={members_only}")];
             if !query.is_empty() {
@@ -519,21 +523,47 @@ async fn admin_command(
             if let Some(kind) = kind {
                 params.push(format!("kind={}", kind.as_str()));
             }
-            let rows = client
-                .get(&format!("/v1/directory?{}", params.join("&")))
-                .await?;
+            let path = if federated {
+                "/v1/directory/federated"
+            } else {
+                "/v1/directory"
+            };
+            let found = client.get(&format!("{path}?{}", params.join("&"))).await?;
+            let rows = if federated {
+                found["results"].clone()
+            } else {
+                found.clone()
+            };
+            for u in found["unreachable"].as_array().into_iter().flatten() {
+                eprintln!(
+                    "indeterminate: {} ({})",
+                    u["network"].as_str().unwrap_or("?"),
+                    u["reason"].as_str().unwrap_or("?")
+                );
+            }
             for r in rows.as_array().into_iter().flatten() {
                 let state = if r["acknowledged"] == true {
                     "member".to_string()
                 } else {
                     r["state"].as_str().unwrap_or("?").to_string()
                 };
+                let via: Vec<&str> = r["path"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|h| h["name"].as_str().or(h["network"].as_str()).unwrap_or("?"))
+                    .collect();
                 println!(
-                    "{:<12} {:<10} {:<32} {}",
+                    "{:<12} {:<10} {:<32} {}{}",
                     state,
                     r["kind"].as_str().unwrap_or("?"),
                     r["label"].as_str().unwrap_or("-"),
-                    r["did"].as_str().unwrap_or("?")
+                    r["did"].as_str().unwrap_or("?"),
+                    if via.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  via {}", via.join(" > "))
+                    }
                 );
             }
             Ok(())

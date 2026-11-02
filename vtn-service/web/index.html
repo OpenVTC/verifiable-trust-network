@@ -49,6 +49,10 @@
   .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
     padding: 8px 12px; cursor: pointer; }
   .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .fed { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+  .via { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .via b { color: var(--text); font-weight: 600; }
+  .warn { font-size: 13px; color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
   .count { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
   ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   li.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -107,12 +111,14 @@
         <button type="button" data-state="members" aria-pressed="false">Members</button>
         <button type="button" data-state="listed" aria-pressed="false">Not acknowledged</button>
       </div>
+      <label class="fed" id="fed-wrap"><input type="checkbox" id="fed"> Include member networks</label>
       <div class="seg" role="group" aria-label="Kind">
         <button type="button" data-kind="all" aria-pressed="true">All</button>
         <button type="button" data-kind="community" aria-pressed="false">Communities</button>
         <button type="button" data-kind="network" aria-pressed="false">Networks</button>
       </div>
     </div>
+    <p class="warn hidden" id="unreachable"></p>
     <p class="count" id="count" aria-live="polite"></p>
     <ul class="list" id="list"></ul>
   </section>
@@ -138,7 +144,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const TOKEN_KEY = "vtn-session";
-  const state = { rows: [], q: "", member: "all", kind: "all" };
+  const state = { rows: [], q: "", member: "all", kind: "all", federated: false, own: [] };
 
   function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } }
   function setToken(t) { try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {} }
@@ -193,13 +199,22 @@
       el("span", { class: "badge b-kind" }, r.kind === "network" ? "Network" : "Community"),
       el("span", { class: "badge " + cls }, label));
     const li = el("li", { class: "card" + (r.acknowledged ? "" : " unack") }, head);
+    if (r.path && r.path.length) {
+      const via = el("div", { class: "via" }, "Listed by ");
+      r.path.forEach((h, i) => {
+        if (i) via.append(" \u2192 ");
+        via.append(el("b", {}, h.name || h.network));
+        if (!h.acknowledged) via.append(" (not acknowledged)");
+      });
+      li.append(via);
+    }
     if (r.description) li.append(el("p", {}, r.description));
     if (r.tags && r.tags.length) li.append(el("div", { class: "tags" }, ...r.tags.map((t) => el("span", { class: "tag" }, t))));
     const links = el("div", { class: "links" }, el("span", { class: "did" }, r.did));
     const site = r.url && safeHref(r.url);
     if (site) links.append(el("a", { href: site, rel: "noopener noreferrer" }, r.kind === "network" ? "Visit network" : "Website"));
-    if (r.listingId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
-    if (r.grantId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
+    if (r.listingId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
+    if (r.grantId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
     li.append(links);
     return li;
   }
@@ -245,10 +260,22 @@
     }
   }
 
+  async function loadFederated() {
+    const res = await get("/v1/directory/federated", true);
+    const warn = $("unreachable");
+    if (res.status !== 200 || !res.body) { warn.textContent = "Member networks could not be searched."; warn.classList.remove("hidden"); return; }
+    state.rows = res.body.results.map((r) => Object.assign({}, r, { path: r.path }));
+    const n = res.body.unreachable.length;
+    warn.textContent = n ? `${n} member network${n === 1 ? "" : "s"} could not be searched (restricted or unreachable); their entries are not shown.` : "";
+    warn.classList.toggle("hidden", !n);
+    renderList();
+  }
+
   async function loadDirectory(visibility) {
     const res = await get("/v1/directory", true);
     if (res.status === 200 && Array.isArray(res.body)) {
       state.rows = res.body;
+      state.own = res.body;
       $("restricted").classList.add("hidden");
       $("directory").classList.remove("hidden");
       renderList();
@@ -286,6 +313,7 @@
       $("did").textContent = info.did || "—";
     }
     const visibility = info?.directory?.visibility || "public";
+    if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
     await loadSession();
     const summary = await get("/v1/directory/summary", true);
     renderStats(summary.status === 200 ? summary.body : null);
@@ -296,6 +324,11 @@
   $("q").addEventListener("input", (e) => {
     clearTimeout(timer);
     timer = setTimeout(() => { state.q = e.target.value; renderList(); }, 120);
+  });
+  $("fed").addEventListener("change", (e) => {
+    state.federated = e.target.checked;
+    if (state.federated) loadFederated();
+    else { state.rows = state.own; $("unreachable").classList.add("hidden"); renderList(); }
   });
   bindSeg("state", "member");
   bindSeg("kind", "kind");
