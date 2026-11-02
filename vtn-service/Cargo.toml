@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 vtn-core = { workspace = true }
+vtn-client = { workspace = true }
+reqwest = { workspace = true }
 vti-common = { workspace = true }
 vti-secrets = { workspace = true }
 vta-sdk = { workspace = true }

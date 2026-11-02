@@ -6,9 +6,12 @@
 //! in with a DID ([`auth`]), which is what the NNM does.
 
 pub mod auth;
+pub mod broadcast;
 pub mod config;
 pub mod error;
+pub mod groups;
 pub mod identity;
+pub mod memberships;
 pub mod network;
 pub mod routes;
 pub mod setup;
@@ -24,7 +27,7 @@ use vtn_core::verify::KeyResolver;
 use crate::auth::Auth;
 use crate::config::Config;
 use crate::identity::VtaKeyResolver;
-use crate::network::Network;
+use crate::network::{Network, Settings};
 use crate::routes::AppState;
 use crate::store::VtnStore;
 
@@ -94,7 +97,11 @@ pub async fn build_state_with(
         config.base_url.clone(),
         store,
         resolver,
-        chrono::Duration::days(config.membership.grant_validity_days),
+        Settings {
+            grant_validity: chrono::Duration::days(config.membership.grant_validity_days),
+            roles: config.roles.clone(),
+            relay: config.relay.clone(),
+        },
     );
     Ok(AppState {
         network: Arc::new(network),

@@ -10,6 +10,8 @@
 //! - [`status`]: W3C Bitstring Status Lists for revocation and suspension.
 //! - [`index`] and [`graph`]: the published network index and the DTG graph export.
 //! - [`directory`]: the searchable member directory behind the network's landing page.
+//! - [`groups`] and [`relay`]: network roles, registered groups, and signed broadcast
+//!   envelopes that cascade through nested networks.
 //!
 //! The normative requirements are `dtgwg-vti-spec/spec/11a-vtn.md` (VTI-VTN-*). Where the
 //! DTG working group has not settled a question, the assumption this crate makes is
@@ -20,10 +22,12 @@ pub mod did_key;
 pub mod directory;
 pub mod error;
 pub mod graph;
+pub mod groups;
 pub mod identity;
 pub mod index;
 pub mod lifecycle;
 pub mod model;
+pub mod relay;
 pub mod status;
 pub mod verify;
 pub mod vocab;

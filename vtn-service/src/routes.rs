@@ -29,9 +29,14 @@ use vtn_core::index::IndexEntry;
 use vtn_core::model::{Entry, EntryKind, EntryProfile, EntryState, Visibility};
 use vtn_core::status::Purpose;
 
+use vtn_core::groups::{RegisteredGroup, RoleDef};
+use vtn_core::relay::{Envelope, Outgoing};
+
 use crate::auth::{Auth, Challenge, Principal, Role, SessionGrant};
+use crate::broadcast::{BroadcastRecord, RelayResponse};
 use crate::config::DirectoryConfig;
 use crate::error::{ApiError, ApiResult};
+use crate::memberships::{Membership, RoleMapping};
 use crate::network::Network;
 use crate::store::AuditEvent;
 
@@ -58,6 +63,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/entries/{did}/offer", get(offer))
         .route("/v1/entries/{did}/acknowledge", post(acknowledge))
         .route("/v1/entries/{did}/repudiate", post(repudiate))
+        .route("/v1/entries/{did}/groups", post(register_group))
+        .route("/v1/relay/{role}", post(relay_receive))
         .route("/v1/auth/challenge", post(auth_challenge))
         .route("/v1/auth/session", get(auth_whoami).post(auth_session));
 
@@ -70,7 +77,27 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/entries/{did}/remove", post(admin_remove))
         .route("/v1/admin/graph", get(admin_graph))
         .route("/v1/admin/audit", get(admin_audit))
-        .route("/v1/admin/whoami", get(admin_whoami));
+        .route("/v1/admin/whoami", get(admin_whoami))
+        .route("/v1/admin/roles", get(admin_roles))
+        .route("/v1/admin/groups", get(admin_groups))
+        .route(
+            "/v1/admin/broadcasts",
+            get(admin_broadcasts).post(admin_broadcast),
+        )
+        .route("/v1/admin/broadcasts/{id}", get(admin_broadcast_record))
+        .route(
+            "/v1/admin/memberships",
+            get(admin_memberships).post(admin_join),
+        )
+        .route(
+            "/v1/admin/memberships/repudiate",
+            post(admin_repudiate_listing),
+        )
+        .route("/v1/admin/memberships/{parent}/leave", post(admin_leave))
+        .route(
+            "/v1/admin/memberships/{parent}/groups",
+            post(admin_upstream_group),
+        );
 
     public.merge(admin).with_state(state)
 }
@@ -151,6 +178,7 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
     Json(json!({
         "did": s.network.did(),
         "profile": s.network.profile,
+        "roles": s.network.roles(),
         "directory": {
             "visibility": s.directory.visibility,
             "showCounts": s.directory.show_counts,
@@ -272,6 +300,36 @@ async fn repudiate(
 ) -> ApiResult<Json<IndexEntry>> {
     let entry = s.network.repudiate(&did, body.repudiation).await?;
     Ok(Json(IndexEntry::from_entry(&entry)))
+}
+
+#[derive(Deserialize)]
+struct GroupBody {
+    registration: Value,
+}
+
+/// A listed party or member registers a group for a role; its signature authenticates it.
+async fn register_group(
+    State(s): State<AppState>,
+    Path(did): Path<String>,
+    Json(body): Json<GroupBody>,
+) -> ApiResult<Json<RegisteredGroup>> {
+    Ok(Json(
+        s.network.register_group(&did, body.registration).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct RelayBody {
+    envelope: Envelope,
+}
+
+/// A parent network delivers a broadcast to this network's group for `role`.
+async fn relay_receive(
+    State(s): State<AppState>,
+    Path(role): Path<String>,
+    Json(body): Json<RelayBody>,
+) -> ApiResult<Json<RelayResponse>> {
+    Ok(Json(s.network.receive(&role, body.envelope).await?))
 }
 
 // -------------------------------------------------------------------- auth
@@ -441,4 +499,97 @@ async fn admin_graph(
 
 async fn admin_audit(State(s): State<AppState>, _: Admin) -> ApiResult<Json<Vec<AuditEvent>>> {
     Ok(Json(s.network.audit().await?))
+}
+
+async fn admin_roles(State(s): State<AppState>, _: Admin) -> Json<Vec<RoleDef>> {
+    Json(s.network.roles().to_vec())
+}
+
+#[derive(Deserialize)]
+struct GroupsQuery {
+    #[serde(default)]
+    role: Option<String>,
+}
+
+async fn admin_groups(
+    State(s): State<AppState>,
+    _: Admin,
+    Query(q): Query<GroupsQuery>,
+) -> ApiResult<Json<Vec<RegisteredGroup>>> {
+    Ok(Json(s.network.groups(q.role.as_deref()).await?))
+}
+
+async fn admin_broadcast(
+    State(s): State<AppState>,
+    Admin(admin): Admin,
+    Json(outgoing): Json<Outgoing>,
+) -> ApiResult<Json<BroadcastRecord>> {
+    Ok(Json(s.network.broadcast(outgoing, &admin).await?))
+}
+
+async fn admin_broadcasts(
+    State(s): State<AppState>,
+    _: Admin,
+) -> ApiResult<Json<Vec<BroadcastRecord>>> {
+    Ok(Json(s.network.broadcasts().await?))
+}
+
+async fn admin_broadcast_record(
+    State(s): State<AppState>,
+    _: Admin,
+    Path(id): Path<String>,
+) -> ApiResult<Json<BroadcastRecord>> {
+    Ok(Json(s.network.broadcast_record(&id).await?))
+}
+
+async fn admin_memberships(
+    State(s): State<AppState>,
+    _: Admin,
+) -> ApiResult<Json<Vec<Membership>>> {
+    Ok(Json(s.network.memberships().await?))
+}
+
+#[derive(Deserialize)]
+struct JoinBody {
+    url: String,
+    #[serde(default)]
+    roles: Vec<RoleMapping>,
+}
+
+async fn admin_join(
+    State(s): State<AppState>,
+    Admin(admin): Admin,
+    Json(body): Json<JoinBody>,
+) -> ApiResult<Json<Membership>> {
+    Ok(Json(s.network.join(&body.url, body.roles, &admin).await?))
+}
+
+#[derive(Deserialize)]
+struct UrlBody {
+    url: String,
+}
+
+async fn admin_repudiate_listing(
+    State(s): State<AppState>,
+    Admin(admin): Admin,
+    Json(body): Json<UrlBody>,
+) -> ApiResult<Json<Membership>> {
+    Ok(Json(s.network.repudiate_listing(&body.url, &admin).await?))
+}
+
+async fn admin_leave(
+    State(s): State<AppState>,
+    Admin(admin): Admin,
+    Path(parent): Path<String>,
+) -> ApiResult<Json<Membership>> {
+    Ok(Json(s.network.leave(&parent, &admin).await?))
+}
+
+async fn admin_upstream_group(
+    State(s): State<AppState>,
+    _: Admin,
+    Path(parent): Path<String>,
+    Json(mapping): Json<RoleMapping>,
+) -> ApiResult<Json<Membership>> {
+    Ok(Json(s.network.add_upstream_group(&parent, mapping).await?))
 }

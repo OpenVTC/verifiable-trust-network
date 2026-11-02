@@ -29,3 +29,19 @@ grant_validity_days = 365
 visibility = "public"
 # Show member counts on the landing page even when the directory is restricted.
 show_counts = true
+
+# Roles members register groups for. A required role must have a registered group before
+# a party's acknowledgement (its membership) is accepted.
+[[roles]]
+name = "admins"
+description = "Administrators of each member community and network"
+required = true
+
+[[roles]]
+name = "notifications"
+description = "Where each member wants network notices delivered"
+
+[relay]
+accept = true      # relay broadcasts from parent networks into this network's groups
+max_hops = 8
+ttl_hours = 72

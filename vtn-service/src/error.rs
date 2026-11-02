@@ -14,6 +14,9 @@ pub enum ApiError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    /// Another network refused or could not be reached.
+    #[error("upstream network: {0}")]
+    Upstream(String),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error(transparent)]
@@ -28,6 +31,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ApiError::Vtn(VtnError::InvalidTransition { .. }) => {
                 (StatusCode::CONFLICT, "invalid_transition")

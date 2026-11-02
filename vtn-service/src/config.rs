@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use vti_secrets::SecretsConfig;
+use vtn_core::groups::RoleDef;
 use vtn_core::model::{Framework, Visibility};
+use vtn_core::relay::DEFAULT_MAX_HOPS;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +33,11 @@ pub struct Config {
     pub membership: MembershipConfig,
     #[serde(default)]
     pub directory: DirectoryConfig,
+    /// The roles members register groups for, e.g. `admins`, `notifications`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<RoleDef>,
+    #[serde(default)]
+    pub relay: RelayConfig,
     /// The VTA-provisioned identity. Absent: development `did:key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<ProvisionedIdentity>,
@@ -76,6 +83,40 @@ impl Default for MembershipConfig {
             grant_validity_days: default_grant_days(),
         }
     }
+}
+
+/// Accepting broadcasts from networks this one is a member of, and passing them on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConfig {
+    /// Relay broadcasts from parent networks into this network's groups. Off: deliveries
+    /// to this network's network groups are refused.
+    #[serde(default = "default_true")]
+    pub accept: bool,
+    /// Refuse an envelope that has already been through more hops than this.
+    #[serde(default = "default_max_hops")]
+    pub max_hops: usize,
+    /// Lifetime of a broadcast this network originates, in hours.
+    #[serde(default = "default_ttl_hours")]
+    pub ttl_hours: i64,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            accept: true,
+            max_hops: DEFAULT_MAX_HOPS,
+            ttl_hours: default_ttl_hours(),
+        }
+    }
+}
+
+fn default_max_hops() -> usize {
+    DEFAULT_MAX_HOPS
+}
+
+fn default_ttl_hours() -> i64 {
+    72
 }
 
 /// Who can see the member directory (and the index and graph, which publish the same set).
@@ -132,6 +173,18 @@ impl Config {
         }
         if self.identity.is_some() && self.secrets.is_none() {
             errors.push("[identity] needs a [secrets] store holding its keys".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for role in &self.roles {
+            if !vtn_core::groups::valid_role_name(&role.name) {
+                errors.push(format!(
+                    "roles: {:?} must be lowercase letters, digits, '-' or '_'",
+                    role.name
+                ));
+            }
+            if !seen.insert(&role.name) {
+                errors.push(format!("roles: {:?} is defined twice", role.name));
+            }
         }
         if self.base_url.ends_with('/') {
             errors.push("base_url must not end with '/'".into());

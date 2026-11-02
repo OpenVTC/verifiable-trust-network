@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["vtn-core", "vtn-service", "nnm-cli"]
+members = ["vtn-core", "vtn-client", "vtn-service", "nnm-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,6 +23,7 @@ type_complexity = "allow"
 
 [workspace.dependencies]
 vtn-core = { path = "vtn-core" }
+vtn-client = { path = "vtn-client" }
 
 dtg-credentials = "0.13"
 affinidi-secrets-resolver = "0.5.15"
