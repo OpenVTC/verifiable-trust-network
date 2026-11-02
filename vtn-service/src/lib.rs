@@ -14,6 +14,7 @@ pub mod groups;
 pub mod identity;
 pub mod memberships;
 pub mod network;
+pub mod rooms;
 pub mod routes;
 pub mod setup;
 pub mod store;
@@ -103,6 +104,8 @@ pub async fn build_state_with(
             roles: config.roles.clone(),
             relay: config.relay.clone(),
             directory: config.directory.clone(),
+            rooms: config.rooms.clone(),
+            status_cache: chrono::Duration::seconds(config.status_cache_seconds.max(0)),
         },
     );
     Ok(AppState {

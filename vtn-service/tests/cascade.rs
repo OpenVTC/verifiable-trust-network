@@ -43,6 +43,15 @@ async fn serve(app: Router) -> String {
 }
 
 async fn live(name: &str, required_admins: bool, visibility: Visibility) -> Live {
+    live_with(name, required_admins, visibility, vec![]).await
+}
+
+async fn live_with(
+    name: &str,
+    required_admins: bool,
+    visibility: Visibility,
+    rooms: Vec<vtn_service::rooms::RoomDef>,
+) -> Live {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();
@@ -53,6 +62,7 @@ async fn live(name: &str, required_admins: bool, visibility: Visibility) -> Live
         data_dir: dir.path().to_path_buf(),
         admins: vec![operator.did().to_string()],
         resolver_url: None,
+        status_cache_seconds: 0,
         network: NetworkConfig {
             name: name.into(),
             description: None,
@@ -73,6 +83,7 @@ async fn live(name: &str, required_admins: bool, visibility: Visibility) -> Live
             required: required_admins,
         }],
         relay: Default::default(),
+        rooms,
         identity: None,
         secrets: None,
     };
@@ -888,4 +899,204 @@ async fn failed_deliveries_are_queued_and_retried() {
     assert_eq!(left[0]["member"], dead.did());
     assert_eq!(left[0]["attempts"], 2);
     assert_eq!(status_of(&record, &dead), "queued");
+}
+
+/// A community joins `net` registering `group` (a group DID it controls) for `admins`.
+/// Returns the chain link for that group: the registration and the network's acceptance.
+async fn join_registering(net: &Live, community: &Identity, group: &Identity) -> ChainLinkJson {
+    community_joins_open(net, community).await;
+    let registration = groups::register(
+        community,
+        &net.did,
+        "admins",
+        group.did(),
+        "http://127.0.0.1:9/",
+        Utc::now() - Duration::seconds(5),
+    )
+    .await
+    .unwrap();
+    let registered = VtnClient::new(&net.url)
+        .post(
+            &format!("/v1/entries/{}/groups", encode_did(community.did())),
+            &json!({ "registration": registration }),
+        )
+        .await
+        .unwrap();
+    json!({ "registration": registration, "acceptance": registered["acceptance"]["credential"] })
+}
+
+type ChainLinkJson = Value;
+
+/// A group's membership credential for `person`.
+async fn group_vmc(group: &Identity, person: &Identity) -> Value {
+    community_vmc(group, person).await
+}
+
+async fn community_vmc(issuer: &Identity, person: &Identity) -> Value {
+    let mut vmc = dtg_credentials::DTGCredential::new_vmc(
+        issuer.did().to_string(),
+        person.did().to_string(),
+        Utc::now() - Duration::seconds(5),
+        Some(Utc::now() + Duration::days(1)),
+        false,
+    )
+    .with_id(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+    issuer.sign_credential(&mut vmc).await.unwrap();
+    serde_json::to_value(vmc).unwrap()
+}
+
+/// `person` asks `net` for a pass to `room`.
+async fn ask_pass(
+    net: &Live,
+    person: &Identity,
+    membership: Value,
+    chain: Vec<Value>,
+) -> Result<Value, Option<u16>> {
+    let client = VtnClient::new(&net.url);
+    let challenge = client
+        .post("/v1/auth/challenge", &json!({ "did": person.did() }))
+        .await
+        .unwrap();
+    let authentication = person
+        .sign_document_for(
+            json!({
+                "type": "VtnAdminAuthentication",
+                "did": person.did(),
+                "challenge": challenge["challenge"],
+                "audience": net.did,
+            }),
+            vtn_core::verify::AUTHENTICATION,
+        )
+        .await
+        .unwrap();
+    client
+        .post(
+            "/v1/rooms/pandemic/pass",
+            &json!({ "authentication": authentication, "membership": membership, "chain": chain }),
+        )
+        .await
+        .map_err(|e| e.status())
+}
+
+#[tokio::test]
+async fn room_passes_follow_group_evidence_through_member_networks() {
+    let room = vtn_service::rooms::RoomDef {
+        id: "pandemic".into(),
+        name: "Pandemic Response".into(),
+        role: "admins".into(),
+        description: None,
+        url: None,
+        pass_minutes: 30,
+    };
+    let whn = live_with("WHN", false, Visibility::Public, vec![room]).await;
+    let au = live("Health-AU", false, Visibility::Public).await;
+    // Health-AU serves WHN's admins with its network group.
+    whn.admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": au.did, "kind": "network" }),
+        )
+        .await
+        .unwrap();
+    au.admin
+        .post(
+            "/v1/admin/memberships",
+            &json!({ "url": whn.url, "roles": [{ "parentRole": "admins", "localRole": "admins" }] }),
+        )
+        .await
+        .unwrap();
+
+    // St Vincent's (in Health-AU) registers its admins group; a person is in that group.
+    let stv = Identity::generate();
+    let stv_admins = Identity::generate();
+    let link = join_registering(&au, &stv, &stv_admins).await;
+    let person = Identity::generate();
+    let vmc = group_vmc(&stv_admins, &person).await;
+
+    let rooms = VtnClient::new(&whn.url).get("/v1/rooms").await.unwrap();
+    assert_eq!(rooms[0]["id"], "pandemic");
+
+    // Through Health-AU: one link.
+    let pass = ask_pass(&whn, &person, vmc.clone(), vec![link.clone()])
+        .await
+        .unwrap();
+    assert_eq!(pass["via"], json!([au.did]));
+    let vac = &pass["pass"];
+    assert_eq!(vac["issuer"], whn.did);
+    assert_eq!(vac["credentialSubject"]["id"], person.did());
+    assert_eq!(
+        vac["credentialSubject"]["authority"]["actions"],
+        json!(["room:enter"])
+    );
+    assert_eq!(
+        vac["credentialSubject"]["authority"]["scope"],
+        format!("{}#room-pandemic", whn.did)
+    );
+    vtn_core::verify::verify_signed_by(vac, &whn.did, &LocalDidKeyResolver, Utc::now())
+        .await
+        .unwrap();
+
+    // A direct member's group needs no chain.
+    let msf = Identity::generate();
+    let msf_admins = Identity::generate();
+    join_registering(&whn, &msf, &msf_admins).await;
+    let doctor = Identity::generate();
+    assert!(
+        ask_pass(&whn, &doctor, group_vmc(&msf_admins, &doctor).await, vec![])
+            .await
+            .is_ok()
+    );
+
+    // Missing the link: refused.
+    assert_eq!(
+        ask_pass(&whn, &person, vmc.clone(), vec![])
+            .await
+            .unwrap_err(),
+        Some(422)
+    );
+    // A group nobody registered: refused.
+    let stranger_group = Identity::generate();
+    let stranger = Identity::generate();
+    assert_eq!(
+        ask_pass(
+            &whn,
+            &stranger,
+            group_vmc(&stranger_group, &stranger).await,
+            vec![link.clone()]
+        )
+        .await
+        .unwrap_err(),
+        Some(422)
+    );
+    // Someone else presenting the person's credential: refused.
+    let thief = Identity::generate();
+    assert_eq!(
+        ask_pass(&whn, &thief, vmc.clone(), vec![link.clone()])
+            .await
+            .unwrap_err(),
+        Some(422)
+    );
+
+    // St Vincent's leaves Health-AU: its acceptance is revoked, and the chain no longer holds.
+    let departure = member::repudiate(
+        &VtnClient::new(&au.url)
+            .get(&format!("/v1/entries/{}", encode_did(stv.did())))
+            .await
+            .unwrap()["grant"],
+        &stv,
+        Utc::now() - Duration::seconds(5),
+    )
+    .await
+    .unwrap();
+    VtnClient::new(&au.url)
+        .post(
+            &format!("/v1/entries/{}/repudiate", encode_did(stv.did())),
+            &json!({ "repudiation": departure }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ask_pass(&whn, &person, vmc, vec![link]).await.unwrap_err(),
+        Some(422)
+    );
 }

@@ -12,6 +12,7 @@
 //! - [`directory`]: the searchable member directory behind the network's landing page.
 //! - [`groups`] and [`relay`]: network roles, registered groups, and signed broadcast
 //!   envelopes that cascade through nested networks.
+//! - [`rooms`]: network room passes, issued on a chain of group evidence.
 //!
 //! The normative requirements are `dtgwg-vti-spec/spec/11a-vtn.md` (VTI-VTN-*). Where the
 //! DTG working group has not settled a question, the assumption this crate makes is
@@ -28,6 +29,7 @@ pub mod index;
 pub mod lifecycle;
 pub mod model;
 pub mod relay;
+pub mod rooms;
 pub mod status;
 pub mod verify;
 pub mod vocab;

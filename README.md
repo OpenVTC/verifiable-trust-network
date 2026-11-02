@@ -33,13 +33,13 @@ Phase 1 of the delivery plan, implemented:
 - **Admin access.** Administrators are DIDs. They sign in by challenge-response from the `nnm`.
 - **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), using its own identity, and can later leave or repudiate.
 - **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
+- **Network rooms.** `[[rooms]]` opens a room for a role. A person in any group registered for that role, directly or through member networks, gets a short-lived room pass by presenting their group evidence.
 - **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
 - **Wallet sign-in.** Members and admins sign in to the landing page from a wallet, via a `vtn-signin:` link (`nnm login` for admins).
 - **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. Members sign in as their VTC or VTN DID, or as a person presenting a membership credential from a member community.
 
 Not yet built (see the design's delivery plan):
 - the VTC-side network-membership module (acknowledge, register groups, relay to members)
-- network data rooms
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
 - TSP/DIDComm delivery transports (A15)
@@ -88,6 +88,7 @@ nnm groups [--role admins]
 nnm broadcast --role admins --subject "…" --body "…" [--class notice] [--reply-to <room>]
 nnm broadcasts [<id>]
 nnm outbox [--retry]
+nnm rooms
 nnm memberships list | join <url> [--role parent=local] | serve <parent> <parent=local> | leave <parent> | repudiate <url>
 nnm suspend|reinstate|remove <did> [--reason <text>]
 nnm graph [--include-exited] [--out graph.json]
@@ -116,6 +117,8 @@ nnm audit
 | POST | `/v1/entries/{did}/acknowledge` | `{ "acknowledgement": <VMC signed by did> }` |
 | POST | `/v1/entries/{did}/repudiate` | `{ "repudiation": <VSC signed by did> }` |
 | POST | `/v1/entries/{did}/groups` | `{ "registration": <servesRole VSC signed by did> }` registers a group for a role |
+| GET | `/v1/rooms` | The network's rooms (visibility-gated) |
+| POST | `/v1/rooms/{id}/pass` | `{ authentication, membership, chain }` gets a room pass on group evidence |
 | POST | `/v1/relay/{role}` | `{ "envelope" }`: a parent network delivers a broadcast to this network's group |
 
 Index, graph, entries, credentials and directory follow `[directory] visibility`.

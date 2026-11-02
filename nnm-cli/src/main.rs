@@ -110,6 +110,8 @@ enum Command {
     },
     /// Broadcasts sent and relayed, or one with its receipts.
     Broadcasts { id: Option<String> },
+    /// The network's rooms.
+    Rooms,
     /// Deliveries queued for retry.
     Outbox {
         /// Retry every queued delivery now.
@@ -535,6 +537,24 @@ async fn admin_command(
             Ok(())
         }
         Command::Memberships(cmd) => memberships(&client, cmd).await,
+        Command::Rooms => {
+            for r in client
+                .get("/v1/rooms")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{:<16} {:<28} role {:<14} pass {} min",
+                    r["id"].as_str().unwrap_or("?"),
+                    r["name"].as_str().unwrap_or("?"),
+                    r["role"].as_str().unwrap_or("?"),
+                    r["pass_minutes"]
+                );
+            }
+            Ok(())
+        }
         Command::Outbox { retry } => {
             if retry {
                 let r = client.post("/v1/admin/outbox/retry", &json!({})).await?;

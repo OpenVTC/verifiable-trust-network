@@ -31,6 +31,8 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
   - The page polls with a secret only it holds and receives the session, which is handed over once.
   - Wallets check that the endpoint answers as the network the link names before signing. `nnm login <link>` acts as the wallet for admins.
 - **service**: a durable delivery queue. A broadcast delivery that fails in transport is queued in the store (`outbox`) and retried with exponential backoff by a background worker, until it succeeds, the message expires, or `relay.max_attempts` is reached. The broadcast's receipts are updated as retries resolve, and a new `queued` delivery status is added. Refusals are not retried. Admins can see and force retries with `/v1/admin/outbox[/retry]` and `nnm outbox [--retry]`.
+- **service**: network room passes (design §5.4, A17). `[[rooms]]` opens a room for a role. A person proves who they are with a sign-in document, and presents their group's membership credential plus one registration/acceptance link per network level. The network verifies every link (signature and status) and walks the chain to a group registered here for the room's role, then issues a short-lived `room:enter` VAC scoped to the room. Rooms are listed at `/v1/rooms` (and with `nnm rooms`); passes are issued at `POST /v1/rooms/{id}/pass`.
+- **service**: `status_cache_seconds` sets how long fetched status lists are trusted (A18).
 - **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
 ### Documentation

@@ -39,6 +39,8 @@ pub struct Settings {
     pub roles: Vec<RoleDef>,
     pub relay: RelayConfig,
     pub directory: crate::config::DirectoryConfig,
+    pub rooms: Vec<crate::rooms::RoomDef>,
+    pub status_cache: Duration,
 }
 
 pub struct Network {
@@ -70,7 +72,8 @@ impl Network {
             .build()
             .expect("HTTP client");
         let status =
-            StatusChecker::with_client(VtnClient::with_http(http.clone(), ""), resolver.clone());
+            StatusChecker::with_client(VtnClient::with_http(http.clone(), ""), resolver.clone())
+                .with_cache_ttl(settings.status_cache);
         Self {
             profile,
             identity,

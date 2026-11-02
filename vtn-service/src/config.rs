@@ -25,6 +25,10 @@ pub struct Config {
     /// DIDs allowed to administer the network: the operators' NNM identities.
     #[serde(default)]
     pub admins: Vec<String>,
+    /// How long a fetched status list (of a community or member network) is trusted before
+    /// refetching. A revocation elsewhere can take this long to be seen here.
+    #[serde(default = "default_status_cache")]
+    pub status_cache_seconds: i64,
     /// A DID resolver sidecar. Unset: resolve directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver_url: Option<String>,
@@ -38,6 +42,9 @@ pub struct Config {
     pub roles: Vec<RoleDef>,
     #[serde(default)]
     pub relay: RelayConfig,
+    /// Rooms the network opens for a role (design §5.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<crate::rooms::RoomDef>,
     /// The VTA-provisioned identity. Absent: development `did:key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<ProvisionedIdentity>,
@@ -168,6 +175,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_status_cache() -> i64 {
+    300
+}
+
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8400";
 
 fn default_listen() -> String {
@@ -208,6 +219,26 @@ impl Config {
             }
             if !seen.insert(&role.name) {
                 errors.push(format!("roles: {:?} is defined twice", role.name));
+            }
+        }
+        for room in &self.rooms {
+            if !vtn_core::groups::valid_role_name(&room.id) {
+                errors.push(format!(
+                    "rooms: id {:?} must be lowercase letters, digits, '-' or '_'",
+                    room.id
+                ));
+            }
+            if !self.roles.iter().any(|r| r.name == room.role) {
+                errors.push(format!(
+                    "rooms: {:?} is for role {:?}, which is not defined",
+                    room.id, room.role
+                ));
+            }
+            if room.pass_minutes <= 0 || room.pass_minutes > 24 * 60 {
+                errors.push(format!(
+                    "rooms: {:?} pass_minutes must be 1..=1440",
+                    room.id
+                ));
             }
         }
         if self.base_url.ends_with('/') {

@@ -67,6 +67,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/entries/{did}/repudiate", post(repudiate))
         .route("/v1/entries/{did}/groups", post(register_group))
         .route("/v1/relay/{role}", post(relay_receive))
+        .route("/v1/rooms", get(rooms_list))
+        .route("/v1/rooms/{id}/pass", post(room_pass))
         .route("/v1/auth/challenge", post(auth_challenge))
         .route("/v1/auth/session", get(auth_whoami).post(auth_session))
         .route("/v1/auth/login", post(auth_login_start))
@@ -355,6 +357,25 @@ async fn relay_receive(
     Json(body): Json<RelayBody>,
 ) -> ApiResult<Json<RelayResponse>> {
     Ok(Json(s.network.receive(&role, body.envelope).await?))
+}
+
+/// The network's rooms. Their existence is as visible as the directory.
+async fn rooms_list(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+) -> ApiResult<Json<Vec<crate::rooms::RoomDef>>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.rooms().to_vec()))
+}
+
+/// A person asks for a room pass, proving who they are and presenting their group evidence.
+async fn room_pass(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::rooms::PassRequest>,
+) -> ApiResult<Json<crate::rooms::RoomPass>> {
+    let (holder, _) = s.auth.verify_sign_in(&request.authentication).await?;
+    Ok(Json(s.network.room_pass(&id, &holder, &request).await?))
 }
 
 // -------------------------------------------------------------------- auth
