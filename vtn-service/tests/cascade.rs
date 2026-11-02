@@ -670,3 +670,96 @@ async fn federated_search_follows_member_networks_with_paths() {
         .unwrap();
     assert!(own.as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
+    let whn = live("WHN", false, Visibility::Members).await;
+    let other = live("Other", false, Visibility::Public).await;
+    let msf = Identity::generate();
+    community_joins_open(&whn, &msf).await;
+
+    // The page starts a login; nobody has signed yet.
+    let page = VtnClient::new(&whn.url);
+    let start = page.post("/v1/auth/login", &json!({})).await.unwrap();
+    let (login, secret) = (
+        start["login"].as_str().unwrap(),
+        start["pollSecret"].as_str().unwrap(),
+    );
+    let poll = |secret: &str| format!("/v1/auth/login/{login}?secret={secret}");
+    assert_eq!(page.get(&poll(secret)).await.unwrap()["status"], "pending");
+    assert_eq!(
+        page.get(&poll("wrong")).await.unwrap_err().status(),
+        Some(401)
+    );
+
+    // A link whose endpoint answers as another network is refused before anything is signed.
+    let mismatched = vtn_client::SignInLink {
+        network: whn.did.clone(),
+        endpoint: other.url.clone(),
+        challenge: start["challenge"].as_str().unwrap().into(),
+    };
+    assert!(mismatched.complete(&msf, None).await.is_err());
+
+    // The wallet (here, the member community itself) signs the link.
+    let link = vtn_client::SignInLink::parse(
+        &vtn_client::SignInLink {
+            network: start["audience"].as_str().unwrap().into(),
+            endpoint: whn.url.clone(),
+            challenge: start["challenge"].as_str().unwrap().into(),
+        }
+        .to_uri(),
+    )
+    .unwrap();
+    let grant = link.complete(&msf, None).await.unwrap();
+    assert_eq!(grant["role"], "memberEntity");
+
+    // The page collects the session once, and it opens the members-only directory.
+    let done = page.get(&poll(secret)).await.unwrap();
+    assert_eq!(done["status"], "complete");
+    assert_eq!(
+        page.get(&poll(secret)).await.unwrap_err().status(),
+        Some(401),
+        "handed over once"
+    );
+    let token = done["session"]["token"].as_str().unwrap();
+    let res = reqwest::Client::new()
+        .get(format!("{}/v1/directory", whn.url))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // The challenge was single use.
+    assert!(link.complete(&msf, None).await.is_err());
+}
+
+/// A community joins a network with no required roles.
+async fn community_joins_open(net: &Live, community: &Identity) {
+    net.admin
+        .post(
+            "/v1/admin/entries",
+            &json!({ "did": community.did(), "kind": "community", "label": "MSF" }),
+        )
+        .await
+        .unwrap();
+    let mut client = VtnClient::new(&net.url);
+    client.sign_in(community, &net.did, None).await.unwrap();
+    let offer = client
+        .get(&format!(
+            "/v1/entries/{}/offer",
+            encode_did(community.did())
+        ))
+        .await
+        .unwrap();
+    let ack = member::acknowledge(&offer, community, Utc::now() - Duration::seconds(5), None)
+        .await
+        .unwrap();
+    client
+        .post(
+            &format!("/v1/entries/{}/acknowledge", encode_did(community.did())),
+            &json!({ "acknowledgement": ack }),
+        )
+        .await
+        .unwrap();
+}

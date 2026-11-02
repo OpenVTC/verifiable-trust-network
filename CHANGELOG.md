@@ -25,6 +25,11 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 - **service**: a person's membership credential is checked against the issuing community's status list at sign-in (A12 resolved).
 - **service**: federated directory search (`/v1/directory/federated`, the landing page's *Include member networks* toggle, and `nnm directory --federated`). Searches the signed indexes of acknowledged member networks, down to `[directory] federate_depth`. Every result carries its path, with each hop's own entry state, and unreachable members are reported as indeterminate (VTI-VTN-032/033, VTI-REG-012, A16).
 - **service**: the landing page's *Trust graph* tab. It draws the network's DTG graph from its credentials. Each membership line is two halves (the network's grant and the member's acknowledgement), listed-only edges are dashed, repudiations are red, and suspended or revoked edges show their status. Selecting a node shows the credentials that are its evidence. A member network expands in place, inside its own labelled boundary, from its verified signed index (`/v1/graph/member/{did}`), so nesting is never flattened (VTI-VTN-033). `#graph` and `#graph-expanded` deep links are supported.
+- **service**: wallet sign-in from the landing page (A13):
+  - The page starts a login (`POST /v1/auth/login`) and shows a `vtn-signin:` link.
+  - A wallet signs the challenge with its DID, optionally presenting a membership credential, and posts it.
+  - The page polls with a secret only it holds and receives the session, which is handed over once.
+  - Wallets check that the endpoint answers as the network the link names before signing. `nnm login <link>` acts as the wallet for admins.
 - **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
 ### Documentation

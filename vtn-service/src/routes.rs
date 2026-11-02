@@ -68,7 +68,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/entries/{did}/groups", post(register_group))
         .route("/v1/relay/{role}", post(relay_receive))
         .route("/v1/auth/challenge", post(auth_challenge))
-        .route("/v1/auth/session", get(auth_whoami).post(auth_session));
+        .route("/v1/auth/session", get(auth_whoami).post(auth_session))
+        .route("/v1/auth/login", post(auth_login_start))
+        .route("/v1/auth/login/{id}", get(auth_login_poll));
 
     let admin = Router::new()
         .route("/v1/admin/entries", get(admin_entries).post(admin_list))
@@ -379,7 +381,7 @@ async fn auth_session(
     State(s): State<AppState>,
     Json(body): Json<SessionBody>,
 ) -> ApiResult<Json<SessionGrant>> {
-    let did = s.auth.verify_sign_in(&body.authentication).await?;
+    let (did, login) = s.auth.verify_sign_in(&body.authentication).await?;
     let role = if s.auth.is_admin(&did) {
         Role::Admin
     } else if let Some(vmc) = &body.membership {
@@ -399,7 +401,29 @@ async fn auth_session(
             _ => return Err(ApiError::Unauthorized),
         }
     };
-    Ok(Json(s.auth.open_session(Principal { did, role }).await))
+    let grant = s.auth.open_session(Principal { did, role }).await;
+    if let Some(login) = login {
+        s.auth.complete_login(&login, &grant).await;
+    }
+    Ok(Json(grant))
+}
+
+/// Start a browser sign-in: the page shows the link, a wallet signs, the page polls.
+async fn auth_login_start(State(s): State<AppState>) -> ApiResult<Json<crate::auth::LoginStart>> {
+    Ok(Json(s.auth.start_login().await?))
+}
+
+#[derive(Deserialize)]
+struct PollQuery {
+    secret: String,
+}
+
+async fn auth_login_poll(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PollQuery>,
+) -> ApiResult<Json<crate::auth::LoginStatus>> {
+    Ok(Json(s.auth.poll_login(&id, &q.secret).await?))
 }
 
 async fn auth_whoami(who: MaybePrincipal) -> ApiResult<Json<Value>> {

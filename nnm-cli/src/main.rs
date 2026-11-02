@@ -78,6 +78,14 @@ enum Command {
     },
     /// Print a session token, e.g. to open a restricted directory in the browser.
     Token,
+    /// Act as a wallet for a browser sign-in: sign the `vtn-signin:` link a landing page
+    /// shows, with this NNM's admin key. The page then signs in.
+    Login {
+        link: String,
+        /// A membership credential (JSON file) to present, to sign in as a member.
+        #[arg(long)]
+        membership: Option<PathBuf>,
+    },
     /// The roles members register groups for.
     Roles,
     /// Groups members registered, optionally for one role.
@@ -256,6 +264,22 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
+        Command::Login { link, membership } => {
+            let link = vtn_client::SignInLink::parse(&link)?;
+            let membership = match membership {
+                Some(p) => Some(serde_json::from_str(&std::fs::read_to_string(&p)?)?),
+                None => None,
+            };
+            let admin = profile.admin()?.identity()?;
+            let grant = link.complete(&admin, membership).await?;
+            println!(
+                "Signed in to {} as {} ({}). The page will continue.",
+                link.network,
+                admin.did(),
+                grant["role"].as_str().unwrap_or("?")
+            );
+            Ok(())
+        }
         command => admin_command(command, &profile, cli.network.as_deref()).await,
     }
 }
@@ -650,7 +674,9 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Keys(_) | Command::Networks(_) => unreachable!("handled above"),
+        Command::Keys(_) | Command::Networks(_) | Command::Login { .. } => {
+            unreachable!("handled above")
+        }
     }
 }
 

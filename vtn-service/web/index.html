@@ -167,8 +167,15 @@
   <section id="restricted" class="notice hidden">
     <h2 id="restricted-title">Members-only directory</h2>
     <p id="restricted-text"></p>
+    <button class="btn" type="button" id="wallet-sign-in">Sign in with a wallet</button>
+    <div id="sign-in-panel" class="hidden">
+      <p>Open this link in your wallet, or sign it with the NNM (<code>nnm login '&lt;link&gt;'</code>). This page continues once it is signed.</p>
+      <p><a id="sign-in-link" href="#">Open in wallet</a> <button class="copy" type="button" id="copy-link">Copy link</button></p>
+      <p class="did" id="sign-in-uri"></p>
+      <p id="sign-in-status" aria-live="polite">Waiting for a signature…</p>
+    </div>
     <details>
-      <summary>Signed in with your community wallet or the NNM? Use a session token.</summary>
+      <summary>Have a session token? Use it instead.</summary>
       <input id="token" type="password" placeholder="Session token" autocomplete="off" aria-label="Session token">
       <button class="btn" id="use-token" type="button">Open the directory</button>
     </details>
@@ -525,6 +532,30 @@
   });
   bindSeg("state", "member");
   bindSeg("kind", "kind");
+  let pollTimer;
+  $("wallet-sign-in").addEventListener("click", async () => {
+    const res = await fetch("/v1/auth/login", { method: "POST", headers: { Accept: "application/json" } });
+    if (!res.ok) { $("sign-in-status").textContent = "Could not start a sign-in."; return; }
+    const start = await res.json();
+    const uri = "vtn-signin:?network=" + encodeURIComponent(start.audience) +
+      "&endpoint=" + encodeURIComponent(location.origin) + "&challenge=" + encodeURIComponent(start.challenge);
+    $("sign-in-link").href = uri;
+    $("sign-in-uri").textContent = uri;
+    $("sign-in-panel").classList.remove("hidden");
+    $("wallet-sign-in").classList.add("hidden");
+    const deadline = Date.parse(start.expiresAt);
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      if (Date.now() > deadline) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in expired. Start again."; $("wallet-sign-in").classList.remove("hidden"); return; }
+      const poll = await fetch(`/v1/auth/login/${encodeURIComponent(start.login)}?secret=${encodeURIComponent(start.pollSecret)}`);
+      if (!poll.ok) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in was not accepted."; return; }
+      const body = await poll.json();
+      if (body.status === "complete") { clearInterval(pollTimer); setToken(body.session.token); location.reload(); }
+    }, 2000);
+  });
+  $("copy-link").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("sign-in-uri").textContent); $("copy-link").textContent = "Copied"; } catch {}
+  });
   $("use-token").addEventListener("click", () => {
     const t = $("token").value.trim();
     if (t) { setToken(t); location.reload(); }
