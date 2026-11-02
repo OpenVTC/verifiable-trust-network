@@ -763,3 +763,129 @@ async fn community_joins_open(net: &Live, community: &Identity) {
         .await
         .unwrap();
 }
+
+/// An inbox that answers 500 `fails` times, then accepts; or always refuses with 403.
+async fn flaky_inbox(fails: u32, refuse: bool) -> (String, Arc<Mutex<Vec<Value>>>) {
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let left = Arc::new(Mutex::new(fails));
+    let (g, l) = (got.clone(), left.clone());
+    let app = Router::new().route(
+        "/",
+        post(move |Json(body): Json<Value>| {
+            let (g, l) = (g.clone(), l.clone());
+            async move {
+                if refuse {
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        Json(json!({ "message": "no" })),
+                    );
+                }
+                let mut left = l.lock().await;
+                if *left > 0 {
+                    *left -= 1;
+                    return (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({})),
+                    );
+                }
+                g.lock().await.push(body);
+                (
+                    axum::http::StatusCode::OK,
+                    Json(json!({ "accepted": true })),
+                )
+            }
+        }),
+    );
+    (format!("{}/", serve(app).await), got)
+}
+
+/// A community joins `net` and registers a group (role not required) at `endpoint`.
+async fn join_with_group(net: &Live, community: &Identity, endpoint: &str) {
+    community_joins_open(net, community).await;
+    let registration = groups::register(
+        community,
+        &net.did,
+        "admins",
+        &format!("{}:groups:admins", community.did()),
+        endpoint,
+        Utc::now() - Duration::seconds(5),
+    )
+    .await
+    .unwrap();
+    VtnClient::new(&net.url)
+        .post(
+            &format!("/v1/entries/{}/groups", encode_did(community.did())),
+            &json!({ "registration": registration }),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_deliveries_are_queued_and_retried() {
+    let whn = live("WHN", false, Visibility::Public).await;
+    let (flaky_url, flaky_got) = flaky_inbox(1, false).await;
+    let (refusing_url, _) = flaky_inbox(0, true).await;
+    let flaky = Identity::generate();
+    let refusing = Identity::generate();
+    let dead = Identity::generate();
+    join_with_group(&whn, &flaky, &flaky_url).await;
+    join_with_group(&whn, &refusing, &refusing_url).await;
+    join_with_group(&whn, &dead, "http://127.0.0.1:9/").await;
+
+    let record = whn
+        .admin
+        .post(
+            "/v1/admin/broadcasts",
+            &json!({ "role": "admins", "subject": "Retry", "body": "…" }),
+        )
+        .await
+        .unwrap();
+    let status_of = |record: &Value, who: &Identity| {
+        record["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["member"] == who.did())
+            .unwrap()["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(status_of(&record, &flaky), "queued");
+    assert_eq!(status_of(&record, &dead), "queued");
+    assert_eq!(
+        status_of(&record, &refusing),
+        "refused",
+        "a refusal is final"
+    );
+    assert_eq!(record["reached"], 0);
+    let outbox = whn.admin.get("/v1/admin/outbox").await.unwrap();
+    assert_eq!(outbox.as_array().unwrap().len(), 2);
+
+    let retried = whn
+        .admin
+        .post("/v1/admin/outbox/retry", &json!({}))
+        .await
+        .unwrap();
+    assert_eq!(retried["attempted"], 2);
+    let id = record["id"].as_str().unwrap();
+    let record = whn
+        .admin
+        .get(&format!(
+            "/v1/admin/broadcasts/{}",
+            vtn_client::encode_query(id)
+        ))
+        .await
+        .unwrap();
+    assert_eq!(status_of(&record, &flaky), "delivered");
+    assert_eq!(record["reached"], 1);
+    assert_eq!(flaky_got.lock().await.len(), 1);
+    // The dead endpoint stays queued, its attempts counted.
+    let outbox = whn.admin.get("/v1/admin/outbox").await.unwrap();
+    let left = outbox.as_array().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["member"], dead.did());
+    assert_eq!(left[0]["attempts"], 2);
+    assert_eq!(status_of(&record, &dead), "queued");
+}

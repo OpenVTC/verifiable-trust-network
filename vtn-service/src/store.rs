@@ -10,6 +10,7 @@
 //! | `memberships` | parent network DID | [`Membership`](crate::memberships::Membership) |
 //! | `broadcasts` | message id | [`BroadcastRecord`](crate::broadcast::BroadcastRecord) |
 //! | `relay_seen` | message id | first-seen time |
+//! | `outbox` | `<message id>\u{0}<group>` | [`OutboxItem`](crate::broadcast::OutboxItem) |
 
 use std::path::Path;
 
@@ -46,6 +47,7 @@ pub struct VtnStore {
     memberships: KeyspaceHandle,
     broadcasts: KeyspaceHandle,
     relay_seen: KeyspaceHandle,
+    outbox: KeyspaceHandle,
 }
 
 const NEXT_INDEX: &str = "next";
@@ -64,6 +66,7 @@ impl VtnStore {
             memberships: store.keyspace("memberships")?,
             broadcasts: store.keyspace("broadcasts")?,
             relay_seen: store.keyspace("relay_seen")?,
+            outbox: store.keyspace("outbox")?,
         })
     }
 
@@ -209,6 +212,32 @@ impl VtnStore {
 
     pub async fn broadcasts<V: DeserializeOwned>(&self) -> Result<Vec<V>, AppError> {
         all(&self.broadcasts, Vec::new()).await
+    }
+
+    fn outbox_key(message: &str, group: &str) -> Vec<u8> {
+        let mut key = message.as_bytes().to_vec();
+        key.push(0);
+        key.extend_from_slice(group.as_bytes());
+        key
+    }
+
+    pub async fn put_outbox<V: serde::Serialize>(
+        &self,
+        message: &str,
+        group: &str,
+        item: &V,
+    ) -> Result<(), AppError> {
+        self.outbox
+            .insert(Self::outbox_key(message, group), item)
+            .await
+    }
+
+    pub async fn remove_outbox(&self, message: &str, group: &str) -> Result<(), AppError> {
+        self.outbox.remove(Self::outbox_key(message, group)).await
+    }
+
+    pub async fn outbox<V: DeserializeOwned>(&self) -> Result<Vec<V>, AppError> {
+        all(&self.outbox, Vec::new()).await
     }
 
     /// Record `id` as seen. `false` if it had been seen already.

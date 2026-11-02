@@ -42,7 +42,7 @@ Not yet built (see the design's delivery plan):
 - network data rooms
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
-- durable, retrying delivery and TSP/DIDComm transports (A15)
+- TSP/DIDComm delivery transports (A15)
 
 ## Run
 
@@ -87,6 +87,7 @@ nnm roles
 nnm groups [--role admins]
 nnm broadcast --role admins --subject "…" --body "…" [--class notice] [--reply-to <room>]
 nnm broadcasts [<id>]
+nnm outbox [--retry]
 nnm memberships list | join <url> [--role parent=local] | serve <parent> <parent=local> | leave <parent> | repudiate <url>
 nnm suspend|reinstate|remove <did> [--reason <text>]
 nnm graph [--include-exited] [--out graph.json]
@@ -135,6 +136,7 @@ Index, graph, entries, credentials and directory follow `[directory] visibility`
 | GET | `/v1/admin/roles` | Roles |
 | GET | `/v1/admin/groups?role=` | Registered groups |
 | POST/GET | `/v1/admin/broadcasts[/{id}]` | Send `{ role, subject, body, class?, replyTo? }`, or list broadcasts with their receipts |
+| GET/POST | `/v1/admin/outbox[/retry]` | Deliveries queued for retry; force a retry pass |
 | POST/GET | `/v1/admin/memberships` | Join a parent `{ url, roles? }`, or list memberships |
 | POST | `/v1/admin/memberships/{parent}/{leave\|groups}` | Leave, or serve another of the parent's roles |
 | POST | `/v1/admin/memberships/repudiate` | `{ url }` repudiates a parent's listing |

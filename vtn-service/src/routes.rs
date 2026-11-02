@@ -89,6 +89,8 @@ pub fn router(state: AppState) -> Router {
             get(admin_broadcasts).post(admin_broadcast),
         )
         .route("/v1/admin/broadcasts/{id}", get(admin_broadcast_record))
+        .route("/v1/admin/outbox", get(admin_outbox))
+        .route("/v1/admin/outbox/retry", post(admin_outbox_retry))
         .route(
             "/v1/admin/memberships",
             get(admin_memberships).post(admin_join),
@@ -637,4 +639,16 @@ async fn admin_upstream_group(
     Json(mapping): Json<RoleMapping>,
 ) -> ApiResult<Json<Membership>> {
     Ok(Json(s.network.add_upstream_group(&parent, mapping).await?))
+}
+
+async fn admin_outbox(
+    State(s): State<AppState>,
+    _: Admin,
+) -> ApiResult<Json<Vec<crate::broadcast::OutboxItem>>> {
+    Ok(Json(s.network.outbox().await?))
+}
+
+async fn admin_outbox_retry(State(s): State<AppState>, _: Admin) -> ApiResult<Json<Value>> {
+    let attempted = s.network.retry_due(true).await?;
+    Ok(Json(json!({ "attempted": attempted })))
 }

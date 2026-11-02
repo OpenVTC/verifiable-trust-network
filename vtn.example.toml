@@ -48,3 +48,5 @@ description = "Where each member wants network notices delivered"
 accept = true      # relay broadcasts from parent networks into this network's groups
 max_hops = 8
 ttl_hours = 72
+max_attempts = 8           # delivery attempts per group before giving up
+retry_base_seconds = 30    # first retry delay; doubles each attempt, capped at an hour

@@ -30,6 +30,7 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
   - A wallet signs the challenge with its DID, optionally presenting a membership credential, and posts it.
   - The page polls with a secret only it holds and receives the session, which is handed over once.
   - Wallets check that the endpoint answers as the network the link names before signing. `nnm login <link>` acts as the wallet for admins.
+- **service**: a durable delivery queue. A broadcast delivery that fails in transport is queued in the store (`outbox`) and retried with exponential backoff by a background worker, until it succeeds, the message expires, or `relay.max_attempts` is reached. The broadcast's receipts are updated as retries resolve, and a new `queued` delivery status is added. Refusals are not retried. Admins can see and force retries with `/v1/admin/outbox[/retry]` and `nnm outbox [--retry]`.
 - **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
 ### Documentation

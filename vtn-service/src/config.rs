@@ -99,6 +99,12 @@ pub struct RelayConfig {
     /// Lifetime of a broadcast this network originates, in hours.
     #[serde(default = "default_ttl_hours")]
     pub ttl_hours: i64,
+    /// Delivery attempts per group before giving up (the first included).
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+    /// First retry delay in seconds; doubles each attempt, capped at an hour.
+    #[serde(default = "default_retry_base")]
+    pub retry_base_seconds: i64,
 }
 
 impl Default for RelayConfig {
@@ -107,6 +113,8 @@ impl Default for RelayConfig {
             accept: true,
             max_hops: DEFAULT_MAX_HOPS,
             ttl_hours: default_ttl_hours(),
+            max_attempts: default_max_attempts(),
+            retry_base_seconds: default_retry_base(),
         }
     }
 }
@@ -117,6 +125,14 @@ fn default_max_hops() -> usize {
 
 fn default_ttl_hours() -> i64 {
     72
+}
+
+fn default_max_attempts() -> u32 {
+    8
+}
+
+fn default_retry_base() -> i64 {
+    30
 }
 
 /// Who can see the member directory (and the index and graph, which publish the same set).

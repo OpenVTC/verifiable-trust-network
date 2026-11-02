@@ -13,9 +13,14 @@
 //! sender learns which groups accepted, counted through relays (the receipts), and never who
 //! is in them.
 //!
-//! **Assumption A15:** delivery is synchronous HTTPS, one request per group per hop, with
-//! receipts returned inline. A durable queue with retries, and TSP/DIDComm delivery, are
-//! still to come.
+//! Delivery is HTTPS, one request per group per hop. A delivery that fails in transport is
+//! **queued** in the store and retried with exponential backoff, until it succeeds, the
+//! message expires, or `relay.max_attempts` is reached. The broadcast's receipt is updated
+//! as it goes. A refusal is final, and not retried.
+//!
+//! **Assumption A15:** retries cover this network's own deliveries; a relaying network
+//! queues its own. Receipts already returned up the chain are not revised after a later
+//! retry downstream. TSP/DIDComm delivery is still to come.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,6 +61,21 @@ pub struct BroadcastRecord {
     pub receipts: Vec<Receipt>,
     /// Groups reached, counted through relays.
     pub reached: usize,
+}
+
+/// A delivery waiting for a retry.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxItem {
+    pub message_id: String,
+    pub group: String,
+    pub member: String,
+    pub endpoint: String,
+    pub envelope: Envelope,
+    pub attempts: u32,
+    pub next_attempt: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub last_error: String,
 }
 
 /// The answer to a relay delivery.
@@ -199,14 +219,17 @@ impl Network {
             }
             if hops.len() + 1 > self.settings.relay.max_hops {
                 set.spawn(async move {
-                    Receipt {
-                        group: group.group,
-                        member: group.member,
-                        status: DeliveryStatus::Refused,
-                        detail: Some("hop limit reached".into()),
-                        network: false,
-                        relayed: Vec::new(),
-                    }
+                    (
+                        Receipt {
+                            group: group.group,
+                            member: group.member,
+                            status: DeliveryStatus::Refused,
+                            detail: Some("hop limit reached".into()),
+                            network: false,
+                            relayed: Vec::new(),
+                        },
+                        None,
+                    )
                 });
                 continue;
             }
@@ -227,24 +250,185 @@ impl Network {
                 match relay::new_hop(&identity, &id, &group.group, &role, hops.len()).await {
                     Ok(hop) => hops.push(hop),
                     Err(e) => {
-                        return receipt(DeliveryStatus::Failed, Some(e.to_string()), None);
+                        return (
+                            receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+                            None,
+                        );
                     }
                 }
-                deliver(
-                    &client,
-                    &group.endpoint,
-                    Envelope { message, hops },
-                    receipt,
-                )
-                .await
+                let envelope = Envelope { message, hops };
+                let r = deliver(&client, &group.endpoint, envelope.clone(), receipt).await;
+                let retry = (r.status == DeliveryStatus::Failed)
+                    .then(|| (group.endpoint.clone(), envelope));
+                (r, retry)
             });
         }
+        let expires_at = message["expiresAt"]
+            .as_str()
+            .and_then(|t| t.parse::<DateTime<Utc>>().ok())
+            .unwrap_or_else(Utc::now);
         let mut receipts = Vec::new();
         while let Some(done) = set.join_next().await {
-            receipts.push(done.map_err(|e| ApiError::Vtn(VtnError::Internal(e.to_string())))?);
+            let (mut receipt, retry) =
+                done.map_err(|e| ApiError::Vtn(VtnError::Internal(e.to_string())))?;
+            if let Some((endpoint, envelope)) = retry
+                && self.settings.relay.max_attempts > 1
+                && expires_at > Utc::now()
+            {
+                let item = OutboxItem {
+                    message_id: id.clone(),
+                    group: receipt.group.clone(),
+                    member: receipt.member.clone(),
+                    endpoint,
+                    envelope,
+                    attempts: 1,
+                    next_attempt: Utc::now() + self.backoff(1),
+                    expires_at,
+                    last_error: receipt.detail.clone().unwrap_or_default(),
+                };
+                self.store.put_outbox(&id, &receipt.group, &item).await?;
+                receipt.status = DeliveryStatus::Queued;
+            }
+            receipts.push(receipt);
         }
         receipts.sort_by(|a, b| a.group.cmp(&b.group));
         Ok(receipts)
+    }
+}
+
+impl Network {
+    fn backoff(&self, attempts: u32) -> Duration {
+        let base = self.settings.relay.retry_base_seconds.max(1);
+        Duration::seconds((base << attempts.saturating_sub(1).min(16)).min(3600))
+    }
+
+    /// Deliveries waiting for a retry.
+    pub async fn outbox(&self) -> ApiResult<Vec<OutboxItem>> {
+        Ok(self.store.outbox().await?)
+    }
+
+    /// Retry queued deliveries that are due (all of them with `force`). Returns how many were
+    /// attempted.
+    pub async fn retry_due(&self, force: bool) -> ApiResult<usize> {
+        let now = Utc::now();
+        let mut attempted = 0;
+        for mut item in self.store.outbox::<OutboxItem>().await? {
+            if !force && item.next_attempt > now {
+                continue;
+            }
+            if item.expires_at <= now {
+                self.settle(
+                    &item,
+                    DeliveryStatus::Failed,
+                    Some("expired before delivery".into()),
+                    None,
+                )
+                .await?;
+                continue;
+            }
+            attempted += 1;
+            let group = item.group.clone();
+            let member = item.member.clone();
+            let receipt = |status, detail: Option<String>, relayed: Option<Vec<Receipt>>| Receipt {
+                group: group.clone(),
+                member: member.clone(),
+                status,
+                detail,
+                network: relayed.is_some(),
+                relayed: relayed.unwrap_or_default(),
+            };
+            let r = deliver(
+                &self.client(""),
+                &item.endpoint,
+                item.envelope.clone(),
+                receipt,
+            )
+            .await;
+            if r.status == DeliveryStatus::Failed {
+                item.attempts += 1;
+                item.last_error = r.detail.clone().unwrap_or_default();
+                if item.attempts >= self.settings.relay.max_attempts {
+                    let detail = format!(
+                        "gave up after {} attempts: {}",
+                        item.attempts, item.last_error
+                    );
+                    self.settle(&item, DeliveryStatus::Failed, Some(detail), None)
+                        .await?;
+                } else {
+                    item.next_attempt = now + self.backoff(item.attempts);
+                    self.store
+                        .put_outbox(&item.message_id, &item.group, &item)
+                        .await?;
+                    self.update_receipt(&item.message_id, &item.group, |rc| {
+                        rc.detail = Some(format!("attempt {}: {}", item.attempts, item.last_error));
+                    })
+                    .await?;
+                }
+            } else {
+                self.settle(
+                    &item,
+                    r.status,
+                    r.detail.clone(),
+                    Some((r.network, r.relayed)),
+                )
+                .await?;
+            }
+        }
+        Ok(attempted)
+    }
+
+    /// Resolve a queued delivery: remove it and record the outcome on the broadcast.
+    async fn settle(
+        &self,
+        item: &OutboxItem,
+        status: DeliveryStatus,
+        detail: Option<String>,
+        relayed: Option<(bool, Vec<Receipt>)>,
+    ) -> ApiResult<()> {
+        self.store
+            .remove_outbox(&item.message_id, &item.group)
+            .await?;
+        self.update_receipt(&item.message_id, &item.group, |rc| {
+            rc.status = status;
+            rc.detail = detail.clone();
+            if let Some((network, relayed)) = relayed.clone() {
+                rc.network = network;
+                rc.relayed = relayed;
+            }
+        })
+        .await
+    }
+
+    async fn update_receipt(
+        &self,
+        message_id: &str,
+        group: &str,
+        change: impl FnOnce(&mut Receipt),
+    ) -> ApiResult<()> {
+        let _guard = self.write.lock().await;
+        let Some(mut record) = self.store.broadcast::<BroadcastRecord>(message_id).await? else {
+            return Ok(());
+        };
+        if let Some(rc) = record.receipts.iter_mut().find(|r| r.group == group) {
+            change(rc);
+        }
+        record.reached = record.receipts.iter().map(Receipt::reached).sum();
+        self.store.put_broadcast(message_id, &record).await?;
+        Ok(())
+    }
+
+    /// Retry due deliveries every `every`, for the life of the process.
+    pub fn spawn_retry_worker(self: &std::sync::Arc<Self>, every: std::time::Duration) {
+        let network = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            loop {
+                tick.tick().await;
+                if let Err(e) = network.retry_due(false).await {
+                    tracing::warn!(error = %e, "delivery retry pass failed");
+                }
+            }
+        });
     }
 }
 

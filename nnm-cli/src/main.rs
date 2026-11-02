@@ -110,6 +110,12 @@ enum Command {
     },
     /// Broadcasts sent and relayed, or one with its receipts.
     Broadcasts { id: Option<String> },
+    /// Deliveries queued for retry.
+    Outbox {
+        /// Retry every queued delivery now.
+        #[arg(long)]
+        retry: bool,
+    },
     /// This network's memberships of other networks.
     #[command(subcommand)]
     Memberships(MembershipsCommand),
@@ -529,6 +535,29 @@ async fn admin_command(
             Ok(())
         }
         Command::Memberships(cmd) => memberships(&client, cmd).await,
+        Command::Outbox { retry } => {
+            if retry {
+                let r = client.post("/v1/admin/outbox/retry", &json!({})).await?;
+                println!("attempted {}", r["attempted"]);
+            }
+            for i in client
+                .get("/v1/admin/outbox")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{}  attempt {:<2} next {}  {}  {}",
+                    i["messageId"].as_str().unwrap_or("?"),
+                    i["attempts"],
+                    i["nextAttempt"].as_str().unwrap_or("?"),
+                    i["member"].as_str().unwrap_or("?"),
+                    i["lastError"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
         Command::Token => {
             println!("{}", client.token().unwrap_or_default());
             eprintln!("Valid for an hour. Paste it into the landing page's session-token box.");
