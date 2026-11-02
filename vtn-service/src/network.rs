@@ -25,17 +25,31 @@ use vtn_core::verify::{
     KeyResolver, Repudiated, verify_acknowledgement, verify_repudiation, verify_signed_by,
 };
 
+use vtn_client::{CredentialState, StatusChecker, VtnClient};
+use vtn_core::groups::RoleDef;
+
+use crate::config::RelayConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::store::{AuditEvent, VtnStore};
 
+/// Network behaviour from configuration.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    pub grant_validity: Duration,
+    pub roles: Vec<RoleDef>,
+    pub relay: RelayConfig,
+}
+
 pub struct Network {
     pub profile: NetworkProfile,
-    identity: Identity,
-    base_url: String,
-    store: VtnStore,
-    resolver: Arc<dyn KeyResolver>,
-    grant_validity: Duration,
-    write: Mutex<()>,
+    pub(crate) identity: Identity,
+    pub(crate) base_url: String,
+    pub(crate) store: VtnStore,
+    pub(crate) resolver: Arc<dyn KeyResolver>,
+    pub(crate) status: StatusChecker,
+    pub(crate) http: reqwest::Client,
+    pub(crate) settings: Settings,
+    pub(crate) write: Mutex<()>,
 }
 
 impl Network {
@@ -45,17 +59,38 @@ impl Network {
         base_url: String,
         store: VtnStore,
         resolver: Arc<dyn KeyResolver>,
-        grant_validity: Duration,
+        settings: Settings,
     ) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .expect("HTTP client");
+        let status =
+            StatusChecker::with_client(VtnClient::with_http(http.clone(), ""), resolver.clone());
         Self {
             profile,
             identity,
             base_url,
             store,
             resolver,
-            grant_validity,
+            status,
+            http,
+            settings,
             write: Mutex::new(()),
         }
+    }
+
+    /// A client for another network at `url`.
+    pub(crate) fn client(&self, url: &str) -> VtnClient {
+        VtnClient::with_http(self.http.clone(), url)
+    }
+
+    pub fn roles(&self) -> &[RoleDef] {
+        &self.settings.roles
+    }
+
+    pub fn role(&self, name: &str) -> Option<&RoleDef> {
+        self.settings.roles.iter().find(|r| r.name == name)
     }
 
     pub fn did(&self) -> &str {
@@ -246,6 +281,7 @@ impl Network {
         let mut entry = self.entry(did).await?;
         let to = transition(Some(entry.state), Event::Remove)?;
         self.revoke_all(&entry).await?;
+        self.drop_groups(did).await?;
         entry.offer = None;
         self.apply(&mut entry, to, reason.clone());
         self.save(&entry, Event::Remove, actor, reason).await?;
@@ -287,9 +323,8 @@ impl Network {
     /// `holder`, signed by a community that is a current member of this network. Returns that
     /// community's DID.
     ///
-    /// **Assumption A12:** the grant's own status is not resolved. The community's status
-    /// list is not fetched; its validity window bounds the exposure. Status checking comes
-    /// with a status-list client.
+    /// The grant's status is resolved against the community's own status lists, verified as
+    /// signed by the community.
     pub async fn verify_member_credential(&self, vmc: &Value, holder: &str) -> ApiResult<String> {
         let refuse = |why: &str| ApiError::Vtn(VtnError::Rejected(why.to_string()));
         let issuer = vmc
@@ -315,7 +350,15 @@ impl Network {
         if credential.subject() != holder {
             return Err(refuse("the membership credential names someone else"));
         }
-        Ok(community.did)
+        // An unreachable or unverifiable status list is indeterminate, so refused
+        // (VTI-REG-012).
+        match self.status.check(vmc).await {
+            Ok(CredentialState::Valid) => Ok(community.did),
+            Ok(state) => Err(refuse(&format!("the membership credential is {state:?}"))),
+            Err(e) => Err(refuse(&format!(
+                "the membership credential's status is indeterminate: {e}"
+            ))),
+        }
     }
 
     // ------------------------------------------------ listed-party actions
@@ -325,6 +368,14 @@ impl Network {
         let _guard = self.write.lock().await;
         let mut entry = self.entry(did).await?;
         let to = transition(Some(entry.state), Event::Acknowledge)?;
+        let missing = self.missing_required_roles(did).await?;
+        if !missing.is_empty() {
+            return Err(VtnError::Rejected(format!(
+                "register a group for each required role before acknowledging: {}",
+                missing.join(", ")
+            ))
+            .into());
+        }
         let offer = entry
             .offer
             .clone()
@@ -381,6 +432,7 @@ impl Network {
             }
             Repudiated::Grant => self.revoke_all(&entry).await?,
         }
+        self.drop_groups(did).await?;
         entry.offer = None;
         self.index_credential(&repudiation, did).await?;
         entry.repudiation = Some(repudiation);
@@ -445,7 +497,7 @@ impl Network {
             self.did(),
             did,
             now,
-            Some(now + self.grant_validity),
+            Some(now + self.settings.grant_validity),
             credential_status(&self.base_url, index),
         );
         Ok(Issued {
@@ -485,6 +537,28 @@ impl Network {
         });
         entry.state = to;
         entry.updated_at = now;
+    }
+
+    /// Append an audit event without changing the entry.
+    pub(crate) async fn record(
+        &self,
+        did: &str,
+        event: Event,
+        state: EntryState,
+        actor: &str,
+        reason: Option<String>,
+    ) -> ApiResult<()> {
+        self.store
+            .append_audit(&AuditEvent {
+                at: Utc::now(),
+                did: did.to_string(),
+                event,
+                to: state,
+                actor: actor.to_string(),
+                reason,
+            })
+            .await?;
+        Ok(())
     }
 
     async fn save(

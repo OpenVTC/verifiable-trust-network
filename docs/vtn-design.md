@@ -328,7 +328,19 @@ support goes in `cnm-cli`.
 
 ## 11. Delivery plan
 
-**Progress (2026-11-02):** Phase 1 network-side is implemented in this repo: `vtn-core`, `vtn-service` (VTA-provisioned `did:webvh` identity via `vtn setup` and the `vtn-host` template, admin sign-in by DID) and `nnm-cli`. `nnm-cli` is the Network Network Manager, the operator CLI alongside PNM and CNM. The repo is a standalone workspace on `vti-common`/`vta-sdk`, with Phase 0 deferred (A10, `docs/assumptions.md`). Not yet done in phase 1: the VTC-side network-membership module, and a VTN acknowledging its own listing in a parent network.
+**Progress (2026-11-02):** Phase 1 network-side is done, and most of phase 2 too:
+- `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli` are built.
+- The network is VTA-provisioned and admins sign in by DID.
+- The landing page has a directory with configurable visibility.
+- Nested membership works: a VTN can join a parent.
+- Roles, required-role admission, and cascading broadcast with signed hop chains and receipts are in (A14, A15).
+
+Not yet done:
+- the VTC-side network-membership module
+- federated search (phase 3)
+- the graph UI (phase 3)
+- network data rooms (phase 4)
+- a durable delivery queue
 
 | Phase | Scope | Exit criterion |
 |---|---|---|

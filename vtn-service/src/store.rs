@@ -6,14 +6,20 @@
 //! | `status` | `revocation` / `suspension` / `next` | [`Bitstring`] / `u32` |
 //! | `credentials` | credential `id` | entry DID |
 //! | `audit` | `<rfc3339>:<uuid>` | [`AuditEvent`] |
+//! | `groups` | `<member DID>\u{0}<role>` | [`RegisteredGroup`] |
+//! | `memberships` | parent network DID | [`Membership`](crate::memberships::Membership) |
+//! | `broadcasts` | message id | [`BroadcastRecord`](crate::broadcast::BroadcastRecord) |
+//! | `relay_seen` | message id | first-seen time |
 
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use vti_common::config::StoreConfig;
 use vti_common::error::AppError;
 use vti_common::store::{KeyspaceHandle, Store};
+use vtn_core::groups::RegisteredGroup;
 use vtn_core::lifecycle::Event;
 use vtn_core::model::{Entry, EntryState, StatusIndex};
 use vtn_core::status::{Bitstring, LIST_BITS, Purpose};
@@ -36,6 +42,10 @@ pub struct VtnStore {
     status: KeyspaceHandle,
     credentials: KeyspaceHandle,
     audit: KeyspaceHandle,
+    groups: KeyspaceHandle,
+    memberships: KeyspaceHandle,
+    broadcasts: KeyspaceHandle,
+    relay_seen: KeyspaceHandle,
 }
 
 const NEXT_INDEX: &str = "next";
@@ -50,6 +60,10 @@ impl VtnStore {
             status: store.keyspace("status")?,
             credentials: store.keyspace("credentials")?,
             audit: store.keyspace("audit")?,
+            groups: store.keyspace("groups")?,
+            memberships: store.keyspace("memberships")?,
+            broadcasts: store.keyspace("broadcasts")?,
+            relay_seen: store.keyspace("relay_seen")?,
         })
     }
 
@@ -117,4 +131,101 @@ impl VtnStore {
             .map(|(_, v)| serde_json::from_slice(&v).map_err(AppError::from))
             .collect()
     }
+
+    // ------------------------------------------------------------- groups
+
+    fn group_key(member: &str, role: &str) -> Vec<u8> {
+        let mut key = member.as_bytes().to_vec();
+        key.push(0);
+        key.extend_from_slice(role.as_bytes());
+        key
+    }
+
+    pub async fn put_group(&self, group: &RegisteredGroup) -> Result<(), AppError> {
+        self.groups
+            .insert(Self::group_key(&group.member, &group.role), group)
+            .await
+    }
+
+    pub async fn group(
+        &self,
+        member: &str,
+        role: &str,
+    ) -> Result<Option<RegisteredGroup>, AppError> {
+        self.groups.get(Self::group_key(member, role)).await
+    }
+
+    pub async fn remove_group(&self, member: &str, role: &str) -> Result<(), AppError> {
+        self.groups.remove(Self::group_key(member, role)).await
+    }
+
+    pub async fn groups(&self) -> Result<Vec<RegisteredGroup>, AppError> {
+        all(&self.groups, Vec::new()).await
+    }
+
+    pub async fn groups_of(&self, member: &str) -> Result<Vec<RegisteredGroup>, AppError> {
+        let mut prefix = member.as_bytes().to_vec();
+        prefix.push(0);
+        all(&self.groups, prefix).await
+    }
+
+    // -------------------------------------------------------- memberships
+
+    pub async fn put_membership<V: serde::Serialize>(
+        &self,
+        parent: &str,
+        m: &V,
+    ) -> Result<(), AppError> {
+        self.memberships.insert(parent, m).await
+    }
+
+    pub async fn membership<V: DeserializeOwned + Send + 'static>(
+        &self,
+        parent: &str,
+    ) -> Result<Option<V>, AppError> {
+        self.memberships.get(parent).await
+    }
+
+    pub async fn memberships<V: DeserializeOwned>(&self) -> Result<Vec<V>, AppError> {
+        all(&self.memberships, Vec::new()).await
+    }
+
+    // --------------------------------------------------------- broadcasts
+
+    pub async fn put_broadcast<V: serde::Serialize>(
+        &self,
+        id: &str,
+        record: &V,
+    ) -> Result<(), AppError> {
+        self.broadcasts.insert(id, record).await
+    }
+
+    pub async fn broadcast<V: DeserializeOwned + Send + 'static>(
+        &self,
+        id: &str,
+    ) -> Result<Option<V>, AppError> {
+        self.broadcasts.get(id).await
+    }
+
+    pub async fn broadcasts<V: DeserializeOwned>(&self) -> Result<Vec<V>, AppError> {
+        all(&self.broadcasts, Vec::new()).await
+    }
+
+    /// Record `id` as seen. `false` if it had been seen already.
+    pub async fn first_sighting(&self, id: &str) -> Result<bool, AppError> {
+        self.relay_seen
+            .insert_if_absent(id, &chrono::Utc::now())
+            .await
+    }
+}
+
+async fn all<V: DeserializeOwned>(
+    ks: &KeyspaceHandle,
+    prefix: Vec<u8>,
+) -> Result<Vec<V>, AppError> {
+    ks.prefix_iter_raw(prefix)
+        .await?
+        .into_iter()
+        .map(|(_, v)| serde_json::from_slice(&v).map_err(AppError::from))
+        .collect()
 }

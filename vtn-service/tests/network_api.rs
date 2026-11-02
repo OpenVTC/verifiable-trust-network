@@ -48,6 +48,8 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         },
         membership: MembershipConfig::default(),
         directory: DirectoryConfig::default(),
+        roles: vec![],
+        relay: Default::default(),
         identity: None,
         secrets: None,
     }

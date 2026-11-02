@@ -1,7 +1,6 @@
 //! `nnm`: the Network Network Manager. It is the operator's CLI for Verifiable Trust
 //! Networks, as `pnm` is for a person and `cnm` for a community.
 
-mod client;
 mod profile;
 
 use std::path::PathBuf;
@@ -10,8 +9,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
-use crate::client::{VtnClient, encode_did, encode_query};
 use crate::profile::{AdminKey, NetworkRef, Profile};
+use vtn_client::{VtnClient, encode_did, encode_query};
 
 #[derive(Parser)]
 #[command(
@@ -76,6 +75,33 @@ enum Command {
     },
     /// Print a session token, e.g. to open a restricted directory in the browser.
     Token,
+    /// The roles members register groups for.
+    Roles,
+    /// Groups members registered, optionally for one role.
+    Groups {
+        #[arg(long)]
+        role: Option<String>,
+    },
+    /// Broadcast to every group registered for a role, cascading through member networks.
+    Broadcast {
+        #[arg(long)]
+        role: String,
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        body: String,
+        /// notice, request-for-action, room-invite, …
+        #[arg(long, default_value = "notice")]
+        class: String,
+        /// Where replies go, e.g. a network data room.
+        #[arg(long)]
+        reply_to: Option<String>,
+    },
+    /// Broadcasts sent and relayed, or one with its receipts.
+    Broadcasts { id: Option<String> },
+    /// This network's memberships of other networks.
+    #[command(subcommand)]
+    Memberships(MembershipsCommand),
     /// Suspend a member.
     Suspend {
         did: String,
@@ -132,6 +158,40 @@ enum KeysCommand {
     },
     /// Print the admin DID.
     Show,
+}
+
+#[derive(Subcommand)]
+enum MembershipsCommand {
+    /// Networks this one is a member of.
+    List,
+    /// Accept a parent network's listing of this network. Each role the parent requires
+    /// is served by this network's role of the same name unless mapped with --role.
+    Join {
+        /// The parent network's URL.
+        url: String,
+        /// `<parent role>=<local role>`, repeatable.
+        #[arg(long = "role", value_parser = parse_mapping)]
+        roles: Vec<(String, String)>,
+    },
+    /// Serve another of the parent's roles with one of this network's.
+    Serve {
+        parent: String,
+        /// `<parent role>=<local role>`.
+        #[arg(value_parser = parse_mapping)]
+        mapping: (String, String),
+    },
+    /// Leave a parent network (repudiate its grant).
+    Leave { parent: String },
+    /// Repudiate a parent network's listing of this one.
+    Repudiate { url: String },
+}
+
+fn parse_mapping(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((p, l)) if !p.is_empty() && !l.is_empty() => Ok((p.into(), l.into())),
+        _ if !s.is_empty() && !s.contains('=') => Ok((s.into(), s.into())),
+        _ => Err(format!("expected <parent role>=<local role>, got {s:?}")),
+    }
 }
 
 #[derive(Subcommand)]
@@ -322,7 +382,7 @@ async fn admin_command(
     }
 
     let admin = profile.admin()?.identity()?;
-    client.sign_in(&admin, &net.did).await?;
+    client.sign_in(&admin, &net.did, None).await?;
 
     match command {
         Command::Status => {
@@ -354,6 +414,94 @@ async fn admin_command(
             Ok(())
         }
         Command::Index => print(&client.get("/v1/index").await?),
+        Command::Roles => {
+            for r in client
+                .get("/v1/admin/roles")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{:<20} {:<9} {}",
+                    r["name"].as_str().unwrap_or("?"),
+                    if r["required"] == true {
+                        "required"
+                    } else {
+                        "optional"
+                    },
+                    r["description"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        Command::Groups { role } => {
+            let path = match role {
+                Some(r) => format!("/v1/admin/groups?role={}", encode_query(&r)),
+                None => "/v1/admin/groups".into(),
+            };
+            for g in client.get(&path).await?.as_array().into_iter().flatten() {
+                println!(
+                    "{:<14} {}  {}  -> {}",
+                    g["role"].as_str().unwrap_or("?"),
+                    g["member"].as_str().unwrap_or("?"),
+                    g["group"].as_str().unwrap_or("?"),
+                    g["endpoint"].as_str().unwrap_or("?")
+                );
+            }
+            Ok(())
+        }
+        Command::Broadcast {
+            role,
+            subject,
+            body,
+            class,
+            reply_to,
+        } => {
+            let record = client
+                .post(
+                    "/v1/admin/broadcasts",
+                    &json!({ "role": role, "subject": subject, "body": body, "class": class, "replyTo": reply_to }),
+                )
+                .await?;
+            println!(
+                "{}  reached {} group(s)",
+                record["id"].as_str().unwrap_or("?"),
+                record["reached"]
+            );
+            print_receipts(&record["receipts"], 1);
+            Ok(())
+        }
+        Command::Broadcasts { id: Some(id) } => {
+            let record = client
+                .get(&format!("/v1/admin/broadcasts/{}", encode_query(&id)))
+                .await?;
+            print(&record["message"])?;
+            println!("reached {} group(s)", record["reached"]);
+            print_receipts(&record["receipts"], 1);
+            Ok(())
+        }
+        Command::Broadcasts { id: None } => {
+            for b in client
+                .get("/v1/admin/broadcasts")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{}  {:<8} {:<10} reached {:<4} {}  {}",
+                    b["at"].as_str().unwrap_or("?"),
+                    b["direction"].as_str().unwrap_or("?"),
+                    b["role"].as_str().unwrap_or("?"),
+                    b["reached"],
+                    b["id"].as_str().unwrap_or("?"),
+                    b["message"]["subject"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        Command::Memberships(cmd) => memberships(&client, cmd).await,
         Command::Token => {
             println!("{}", client.token().unwrap_or_default());
             eprintln!("Valid for an hour. Paste it into the landing page's session-token box.");
@@ -473,6 +621,94 @@ async fn admin_command(
             Ok(())
         }
         Command::Keys(_) | Command::Networks(_) => unreachable!("handled above"),
+    }
+}
+
+async fn memberships(client: &VtnClient, cmd: MembershipsCommand) -> anyhow::Result<()> {
+    let show = |m: &Value| {
+        println!(
+            "{:<13} {}  {}  {}",
+            m["state"].as_str().unwrap_or("?"),
+            m["parentName"].as_str().unwrap_or("-"),
+            m["parent"].as_str().unwrap_or("?"),
+            m["url"].as_str().unwrap_or("?")
+        );
+        for g in m["groups"].as_array().into_iter().flatten() {
+            println!(
+                "              serves {} with {}",
+                g["parentRole"].as_str().unwrap_or("?"),
+                g["localRole"].as_str().unwrap_or("?")
+            );
+        }
+    };
+    let mapping = |(p, l): (String, String)| json!({ "parentRole": p, "localRole": l });
+    match cmd {
+        MembershipsCommand::List => {
+            for m in client
+                .get("/v1/admin/memberships")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                show(m);
+            }
+        }
+        MembershipsCommand::Join { url, roles } => {
+            let roles: Vec<Value> = roles.into_iter().map(mapping).collect();
+            show(
+                &client
+                    .post(
+                        "/v1/admin/memberships",
+                        &json!({ "url": url, "roles": roles }),
+                    )
+                    .await?,
+            );
+        }
+        MembershipsCommand::Serve { parent, mapping: m } => {
+            show(
+                &client
+                    .post(
+                        &format!("/v1/admin/memberships/{}/groups", encode_did(&parent)),
+                        &mapping(m),
+                    )
+                    .await?,
+            );
+        }
+        MembershipsCommand::Leave { parent } => {
+            show(
+                &client
+                    .post(
+                        &format!("/v1/admin/memberships/{}/leave", encode_did(&parent)),
+                        &json!({}),
+                    )
+                    .await?,
+            );
+        }
+        MembershipsCommand::Repudiate { url } => {
+            show(
+                &client
+                    .post("/v1/admin/memberships/repudiate", &json!({ "url": url }))
+                    .await?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_receipts(receipts: &Value, depth: usize) {
+    for r in receipts.as_array().into_iter().flatten() {
+        println!(
+            "{}{:<10} {}{}",
+            "  ".repeat(depth),
+            r["status"].as_str().unwrap_or("?"),
+            r["member"].as_str().unwrap_or("?"),
+            r["detail"]
+                .as_str()
+                .map(|d| format!("  ({d})"))
+                .unwrap_or_default()
+        );
+        print_receipts(&r["relayed"], depth + 1);
     }
 }
 

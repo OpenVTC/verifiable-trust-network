@@ -54,6 +54,7 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal --no-self-update --component clippy
           rustup default stable
+      - uses: ./.github/actions/system-deps
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
@@ -68,6 +69,7 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
+      - uses: ./.github/actions/system-deps
       - run: cargo test --workspace --locked
 
   msrv:
@@ -80,6 +82,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/system-deps
       - run: |
           msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           rustup toolchain install "$msrv" --profile minimal --no-self-update

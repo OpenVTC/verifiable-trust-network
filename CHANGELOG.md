@@ -16,7 +16,14 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 - **service**: `vtn setup` provisions the network's `did:webvh` on a VTA from the `vtn-host` DID template, and keeps the keys in a `vti-secrets` store (VTI-VTN-001).
 - **service**: administrators are DIDs and sign in by challenge-response. This replaces the earlier bearer token.
 - **service**: the network landing page, with a searchable member directory. Directory visibility is `public`, `members` or `admins`. Members sign in with their entity DID, or a person signs in by presenting a membership credential from a member community.
-- **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit.
+- **core**: network roles and group registration. A member signs a `servesRole/1` VSC for one of its groups (member → group, naming network, role and delivery endpoint), and the network answers with a `groupRegistered/1` VSC. A VTN serves a parent's role with its own *network group* (`<DID>#role-<name>`, A14).
+- **core**: broadcast envelopes. The message is signed by the origin network, plus one signed hop per relay step. Verification checks the origin's signature, expiry, the hop limit, and an unbroken chain in which each hop is signed by the network that owns the previous hop's group (VTI-VTN-032/033 for messages).
+- **client**: `vtn-client`, a shared HTTP client (DID sign-in bound to the expected network DID) and a Bitstring Status List checker. Lists are verified as signed by the credential's issuer and cached briefly. An unreachable list is indeterminate, never valid (VTI-REG-012).
+- **service**: nested membership. A VTN joins a parent network that lists it: it signs in as itself, verifies its listing, registers its network groups for the parent's required roles, acknowledges, and verifies the grant. It can also serve further roles, leave (departure), or repudiate a parent's listing.
+- **service**: required roles. A party must register a group for each `required` role before its acknowledgement is accepted. Groups are revoked and dropped when a member departs or is removed.
+- **service**: cascading broadcast to a role. Delivery goes to every current member's registered group. A network group relays into its own members' groups, so no network learns another's roster. Repeats are dropped by message id (which also breaks cycles), deliveries from networks this one is not a member of are refused, and a hop limit applies. Receipts are aggregated back up the chain.
+- **service**: a person's membership credential is checked against the issuing community's status list at sign-in (A12 resolved).
+- **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
 ### Documentation
 

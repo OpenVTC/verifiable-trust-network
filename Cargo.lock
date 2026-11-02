@@ -3091,11 +3091,11 @@ dependencies = [
  "anyhow",
  "clap",
  "getrandom 0.3.4",
- "reqwest",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "vtn-client",
  "vtn-core",
 ]
 
@@ -5372,6 +5372,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vtn-client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "vtn-core",
+]
+
+[[package]]
 name = "vtn-core"
 version = "0.1.0"
 dependencies = [
@@ -5403,6 +5416,7 @@ dependencies = [
  "clap",
  "dtg-credentials",
  "getrandom 0.3.4",
+ "reqwest",
  "serde",
  "serde_ignored",
  "serde_json",
@@ -5417,6 +5431,7 @@ dependencies = [
  "vta-sdk",
  "vti-common",
  "vti-secrets",
+ "vtn-client",
  "vtn-core",
 ]
 
