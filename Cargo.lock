@@ -1524,7 +1524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3090,7 +3090,7 @@ dependencies = [
  "affinidi-secrets-resolver",
  "anyhow",
  "clap",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "serde",
  "serde_json",
  "tempfile",
@@ -5394,7 +5394,7 @@ dependencies = [
  "chrono",
  "dtg-credentials",
  "flate2",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "multibase",
  "serde",
  "serde_json",
@@ -5415,7 +5415,7 @@ dependencies = [
  "chrono",
  "clap",
  "dtg-credentials",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "reqwest",
  "serde",
  "serde_ignored",
