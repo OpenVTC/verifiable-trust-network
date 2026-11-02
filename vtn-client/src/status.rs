@@ -19,7 +19,9 @@ pub enum CredentialState {
     Revoked,
 }
 
-const CACHE_TTL: Duration = Duration::minutes(5);
+/// Default time a fetched status list is trusted before refetching. A revocation can take
+/// this long to be seen here.
+pub const DEFAULT_CACHE_TTL: Duration = Duration::minutes(5);
 
 /// Resolves `credentialStatus`. Clone-cheap; the cache is shared.
 #[derive(Clone)]
@@ -27,6 +29,7 @@ pub struct StatusChecker {
     client: VtnClient,
     resolver: Arc<dyn KeyResolver>,
     cache: Arc<Mutex<HashMap<String, (DateTime<Utc>, String, Bitstring)>>>,
+    ttl: Duration,
 }
 
 impl StatusChecker {
@@ -39,7 +42,14 @@ impl StatusChecker {
             client,
             resolver,
             cache: Arc::default(),
+            ttl: DEFAULT_CACHE_TTL,
         }
+    }
+
+    /// How long a fetched list is trusted. Zero refetches every time.
+    pub fn with_cache_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
     }
 
     /// The state of `credential`. A credential with no `credentialStatus` is `Valid`: its
@@ -86,7 +96,7 @@ impl StatusChecker {
     async fn list(&self, url: &str, issuer: &str, purpose: &str) -> Result<Bitstring, ClientError> {
         let now = Utc::now();
         if let Some((at, cached_issuer, bits)) = self.cache.lock().await.get(url)
-            && now - *at < CACHE_TTL
+            && now - *at < self.ttl
             && cached_issuer == issuer
         {
             return Ok(bits.clone());

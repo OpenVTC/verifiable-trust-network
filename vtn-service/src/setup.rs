@@ -285,11 +285,13 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
         data_dir: data_dir.clone(),
         admins: inputs.admins.clone(),
         resolver_url: inputs.resolver_url.clone(),
+        status_cache_seconds: 300,
         network: inputs.network.clone(),
         membership: inputs.membership.clone(),
         directory: inputs.directory.clone(),
         roles: Vec::new(),
         relay: Default::default(),
+        rooms: Vec::new(),
         identity: Some(ProvisionedIdentity {
             did: did.clone(),
             vta_did: inputs.vta_did.clone(),

@@ -33,17 +33,16 @@ Phase 1 of the delivery plan, implemented:
 - **Admin access.** Administrators are DIDs. They sign in by challenge-response from the `nnm`.
 - **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), using its own identity, and can later leave or repudiate.
 - **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
+- **Network rooms.** `[[rooms]]` opens a room for a role. A person in any group registered for that role, directly or through member networks, gets a short-lived room pass by presenting their group evidence.
+- **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
+- **Wallet sign-in.** Members and admins sign in to the landing page from a wallet, via a `vtn-signin:` link (`nnm login` for admins).
 - **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. Members sign in as their VTC or VTN DID, or as a person presenting a membership credential from a member community.
 
 Not yet built (see the design's delivery plan):
 - the VTC-side network-membership module (acknowledge, register groups, relay to members)
-- federated search across nested networks
-- the graph UI
-- network data rooms
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
-- durable, retrying delivery and TSP/DIDComm transports (A15)
-- wallet sign-in on the landing page (A13)
+- TSP/DIDComm delivery transports (A15)
 
 ## Run
 
@@ -81,12 +80,15 @@ nnm status
 nnm entries [<did>]
 nnm list <did> --kind community|network [--label <label>] [--description …] [--url …] [--tag …]
 nnm profile <did> [--label …] [--description …] [--url …] [--tag …]
-nnm directory [terms…] [--kind community|network] [--members-only]
+nnm directory [terms…] [--kind community|network] [--members-only] [--federated]
 nnm token
+nnm login '<vtn-signin: link>' [--membership vmc.json]   # sign a landing page's sign-in as a wallet
 nnm roles
 nnm groups [--role admins]
 nnm broadcast --role admins --subject "…" --body "…" [--class notice] [--reply-to <room>]
 nnm broadcasts [<id>]
+nnm outbox [--retry]
+nnm rooms
 nnm memberships list | join <url> [--role parent=local] | serve <parent> <parent=local> | leave <parent> | repudiate <url>
 nnm suspend|reinstate|remove <did> [--reason <text>]
 nnm graph [--include-exited] [--out graph.json]
@@ -103,9 +105,11 @@ nnm audit
 | GET | `/` | Landing page with the searchable directory |
 | GET | `/.well-known/vtn` | DID, profile and directory visibility |
 | GET | `/v1/directory?q=&kind=&state=&members_only=` | Directory search (visibility-gated) |
+| GET | `/v1/directory/federated?q=…` | Search including member networks' signed indexes; results carry their path |
 | GET | `/v1/directory/summary` | Member counts (public unless `show_counts = false`) |
 | GET | `/v1/index` | Signed index of published entries, each with `kind` and `acknowledged` |
 | GET | `/v1/graph` | DTG graph: nodes, and one edge per credential with its status |
+| GET | `/v1/graph/member/{did}` | A member network's graph, from its verified signed index |
 | GET | `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
 | GET | `/v1/credentials/{id}` | A credential the network issued or holds |
 | GET | `/v1/entries/{did}` | One published entry |
@@ -113,11 +117,13 @@ nnm audit
 | POST | `/v1/entries/{did}/acknowledge` | `{ "acknowledgement": <VMC signed by did> }` |
 | POST | `/v1/entries/{did}/repudiate` | `{ "repudiation": <VSC signed by did> }` |
 | POST | `/v1/entries/{did}/groups` | `{ "registration": <servesRole VSC signed by did> }` registers a group for a role |
+| GET | `/v1/rooms` | The network's rooms (visibility-gated) |
+| POST | `/v1/rooms/{id}/pass` | `{ authentication, membership, chain }` gets a room pass on group evidence |
 | POST | `/v1/relay/{role}` | `{ "envelope" }`: a parent network delivers a broadcast to this network's group |
 
 Index, graph, entries, credentials and directory follow `[directory] visibility`.
 
-**Sign-in:** `POST /v1/auth/challenge { did }`, then `POST /v1/auth/session { authentication }`. The `authentication` document is `{ type: "VtnAdminAuthentication", did, challenge, audience }`, signed for `authentication`. A person may add `membership`: a VMC from a member community naming them. The session's role is decided at sign-in: admin, member (entity or by credential), or listed. `GET /v1/auth/session` shows it.
+**Sign-in:** `POST /v1/auth/challenge { did }`, then `POST /v1/auth/session { authentication }`. The `authentication` document is `{ type: "VtnAdminAuthentication", did, challenge, audience }`, signed for `authentication`. A person may add `membership`: a VMC from a member community naming them. For a browser, `POST /v1/auth/login` starts a sign-in whose challenge any DID may sign. A wallet completes it from a `vtn-signin:` link, and the page collects the session from `GET /v1/auth/login/{id}?secret=…`. The session's role is decided at sign-in: admin, member (entity or by credential), or listed. `GET /v1/auth/session` shows it.
 
 **Admin** (`Authorization: Bearer <session>`):
 
@@ -133,6 +139,7 @@ Index, graph, entries, credentials and directory follow `[directory] visibility`
 | GET | `/v1/admin/roles` | Roles |
 | GET | `/v1/admin/groups?role=` | Registered groups |
 | POST/GET | `/v1/admin/broadcasts[/{id}]` | Send `{ role, subject, body, class?, replyTo? }`, or list broadcasts with their receipts |
+| GET/POST | `/v1/admin/outbox[/retry]` | Deliveries queued for retry; force a retry pass |
 | POST/GET | `/v1/admin/memberships` | Join a parent `{ url, roles? }`, or list memberships |
 | POST | `/v1/admin/memberships/{parent}/{leave\|groups}` | Leave, or serve another of the parent's roles |
 | POST | `/v1/admin/memberships/repudiate` | `{ url }` repudiates a parent's listing |

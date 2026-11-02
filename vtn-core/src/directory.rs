@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::index::{IndexEntry, NetworkIndex};
 use crate::model::{Entry, EntryKind, EntryState};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -43,6 +44,27 @@ impl DirectoryEntry {
             tags: entry.profile.tags.clone(),
             listing_id: entry.listing_id().map(str::to_string),
             grant_id: entry.grant_id().map(str::to_string),
+        }
+    }
+
+    pub fn from_index_entry(entry: &IndexEntry) -> Self {
+        let id = |v: &Option<serde_json::Value>| {
+            v.as_ref()
+                .and_then(|c| c.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        Self {
+            did: entry.did.clone(),
+            kind: entry.kind,
+            state: entry.state,
+            acknowledged: entry.acknowledged,
+            label: entry.label.clone(),
+            description: entry.profile.description.clone(),
+            url: entry.profile.url.clone(),
+            tags: entry.profile.tags.clone(),
+            listing_id: id(&Some(entry.listing.clone())),
+            grant_id: id(&entry.grant),
         }
     }
 
@@ -86,6 +108,68 @@ pub fn search<'a>(
     entries: impl IntoIterator<Item = &'a Entry>,
     query: &DirectoryQuery,
 ) -> Vec<DirectoryEntry> {
+    filter_rows(
+        entries
+            .into_iter()
+            .filter(|e| e.state.is_published())
+            .map(DirectoryEntry::from_entry),
+        query,
+    )
+}
+
+/// Search another network's (verified) index.
+pub fn search_index(index: &NetworkIndex, query: &DirectoryQuery) -> Vec<DirectoryEntry> {
+    filter_rows(
+        index
+            .entries
+            .iter()
+            .filter(|e| e.state.is_published())
+            .map(DirectoryEntry::from_index_entry),
+        query,
+    )
+}
+
+/// One step on the way to a federated result: a network, and its entry in the network
+/// before it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PathHop {
+    pub network: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// That network's entry state in the network before it on the path. Evaluated per hop,
+    /// never inferred from another (VTI-VTN-032).
+    pub state: EntryState,
+    pub acknowledged: bool,
+}
+
+/// A directory row found through member networks. `path` is empty for this network's own
+/// entries. Otherwise it names each network between this one and the network that lists
+/// the row, so the row is never presented as this network's own (VTI-VTN-033).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedEntry {
+    #[serde(flatten)]
+    pub entry: DirectoryEntry,
+    /// The network that lists this row.
+    pub listed_by: String,
+    pub path: Vec<PathHop>,
+}
+
+/// A member network whose index could not be read: indeterminate, not absent
+/// (VTI-REG-012).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Unreachable {
+    pub network: String,
+    pub path: Vec<PathHop>,
+    pub reason: String,
+}
+
+fn filter_rows(
+    rows: impl Iterator<Item = DirectoryEntry>,
+    query: &DirectoryQuery,
+) -> Vec<DirectoryEntry> {
     let terms: Vec<String> = query
         .q
         .as_deref()
@@ -93,10 +177,7 @@ pub fn search<'a>(
         .split_whitespace()
         .map(str::to_lowercase)
         .collect();
-    let mut rows: Vec<DirectoryEntry> = entries
-        .into_iter()
-        .filter(|e| e.state.is_published())
-        .map(DirectoryEntry::from_entry)
+    let mut rows: Vec<DirectoryEntry> = rows
         .filter(|row| query.kind.is_none_or(|k| row.kind == k))
         .filter(|row| query.state.is_none_or(|s| row.state == s))
         .filter(|row| !query.members_only || row.acknowledged)

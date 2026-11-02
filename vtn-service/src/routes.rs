@@ -56,8 +56,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/status/{purpose}", get(status_list))
         .route("/v1/directory", get(directory))
         .route("/v1/directory/summary", get(directory_summary))
+        .route("/v1/directory/federated", get(federated_directory))
         .route("/v1/index", get(index))
         .route("/v1/graph", get(public_graph))
+        .route("/v1/graph/member/{did}", get(member_graph))
         .route("/v1/credentials/{id}", get(credential))
         .route("/v1/entries/{did}", get(public_entry))
         .route("/v1/entries/{did}/offer", get(offer))
@@ -65,8 +67,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/entries/{did}/repudiate", post(repudiate))
         .route("/v1/entries/{did}/groups", post(register_group))
         .route("/v1/relay/{role}", post(relay_receive))
+        .route("/v1/rooms", get(rooms_list))
+        .route("/v1/rooms/{id}/pass", post(room_pass))
         .route("/v1/auth/challenge", post(auth_challenge))
-        .route("/v1/auth/session", get(auth_whoami).post(auth_session));
+        .route("/v1/auth/session", get(auth_whoami).post(auth_session))
+        .route("/v1/auth/login", post(auth_login_start))
+        .route("/v1/auth/login/{id}", get(auth_login_poll));
 
     let admin = Router::new()
         .route("/v1/admin/entries", get(admin_entries).post(admin_list))
@@ -85,6 +91,8 @@ pub fn router(state: AppState) -> Router {
             get(admin_broadcasts).post(admin_broadcast),
         )
         .route("/v1/admin/broadcasts/{id}", get(admin_broadcast_record))
+        .route("/v1/admin/outbox", get(admin_outbox))
+        .route("/v1/admin/outbox/retry", post(admin_outbox_retry))
         .route(
             "/v1/admin/memberships",
             get(admin_memberships).post(admin_join),
@@ -182,6 +190,7 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
         "directory": {
             "visibility": s.directory.visibility,
             "showCounts": s.directory.show_counts,
+            "federateDepth": s.directory.federate_depth,
         },
         "links": {
             "directory": "/v1/directory",
@@ -213,6 +222,15 @@ async fn directory(
     Ok(Json(s.network.directory(&query).await?))
 }
 
+async fn federated_directory(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+    Query(query): Query<DirectoryQuery>,
+) -> ApiResult<Json<crate::federation::FederatedResult>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.federated_directory(&query).await?))
+}
+
 async fn directory_summary(
     State(s): State<AppState>,
     who: MaybePrincipal,
@@ -231,6 +249,15 @@ async fn index(State(s): State<AppState>, who: MaybePrincipal) -> ApiResult<Json
 async fn public_graph(State(s): State<AppState>, who: MaybePrincipal) -> ApiResult<Json<Graph>> {
     require_directory(&s, &who)?;
     Ok(Json(s.network.graph(false).await?))
+}
+
+async fn member_graph(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+    Path(did): Path<String>,
+) -> ApiResult<Json<Graph>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.member_graph(&did).await?))
 }
 
 async fn credential(
@@ -332,6 +359,25 @@ async fn relay_receive(
     Ok(Json(s.network.receive(&role, body.envelope).await?))
 }
 
+/// The network's rooms. Their existence is as visible as the directory.
+async fn rooms_list(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+) -> ApiResult<Json<Vec<crate::rooms::RoomDef>>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.rooms().to_vec()))
+}
+
+/// A person asks for a room pass, proving who they are and presenting their group evidence.
+async fn room_pass(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::rooms::PassRequest>,
+) -> ApiResult<Json<crate::rooms::RoomPass>> {
+    let (holder, _) = s.auth.verify_sign_in(&request.authentication).await?;
+    Ok(Json(s.network.room_pass(&id, &holder, &request).await?))
+}
+
 // -------------------------------------------------------------------- auth
 
 #[derive(Deserialize)]
@@ -358,7 +404,7 @@ async fn auth_session(
     State(s): State<AppState>,
     Json(body): Json<SessionBody>,
 ) -> ApiResult<Json<SessionGrant>> {
-    let did = s.auth.verify_sign_in(&body.authentication).await?;
+    let (did, login) = s.auth.verify_sign_in(&body.authentication).await?;
     let role = if s.auth.is_admin(&did) {
         Role::Admin
     } else if let Some(vmc) = &body.membership {
@@ -378,7 +424,29 @@ async fn auth_session(
             _ => return Err(ApiError::Unauthorized),
         }
     };
-    Ok(Json(s.auth.open_session(Principal { did, role }).await))
+    let grant = s.auth.open_session(Principal { did, role }).await;
+    if let Some(login) = login {
+        s.auth.complete_login(&login, &grant).await;
+    }
+    Ok(Json(grant))
+}
+
+/// Start a browser sign-in: the page shows the link, a wallet signs, the page polls.
+async fn auth_login_start(State(s): State<AppState>) -> ApiResult<Json<crate::auth::LoginStart>> {
+    Ok(Json(s.auth.start_login().await?))
+}
+
+#[derive(Deserialize)]
+struct PollQuery {
+    secret: String,
+}
+
+async fn auth_login_poll(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PollQuery>,
+) -> ApiResult<Json<crate::auth::LoginStatus>> {
+    Ok(Json(s.auth.poll_login(&id, &q.secret).await?))
 }
 
 async fn auth_whoami(who: MaybePrincipal) -> ApiResult<Json<Value>> {
@@ -592,4 +660,16 @@ async fn admin_upstream_group(
     Json(mapping): Json<RoleMapping>,
 ) -> ApiResult<Json<Membership>> {
     Ok(Json(s.network.add_upstream_group(&parent, mapping).await?))
+}
+
+async fn admin_outbox(
+    State(s): State<AppState>,
+    _: Admin,
+) -> ApiResult<Json<Vec<crate::broadcast::OutboxItem>>> {
+    Ok(Json(s.network.outbox().await?))
+}
+
+async fn admin_outbox_retry(State(s): State<AppState>, _: Admin) -> ApiResult<Json<Value>> {
+    let attempted = s.network.retry_due(true).await?;
+    Ok(Json(json!({ "attempted": attempted })))
 }

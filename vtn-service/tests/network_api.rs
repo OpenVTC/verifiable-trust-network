@@ -37,6 +37,7 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         data_dir: dir.to_path_buf(),
         admins,
         resolver_url: None,
+        status_cache_seconds: 0,
         network: NetworkConfig {
             name: name.into(),
             description: None,
@@ -50,6 +51,7 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         directory: DirectoryConfig::default(),
         roles: vec![],
         relay: Default::default(),
+        rooms: vec![],
         identity: None,
         secrets: None,
     }

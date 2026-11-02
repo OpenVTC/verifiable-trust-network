@@ -6,6 +6,9 @@ listen = "127.0.0.1:8400"
 base_url = "http://127.0.0.1:8400"
 # Holds the store, the identity seed and the admin token (created by `vtn init`).
 data_dir = "data/vtn"
+# How long a fetched status list (a community's or member network's) is trusted. A
+# revocation elsewhere can take this long to be seen here.
+status_cache_seconds = 300
 # Administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
 admins = ["did:key:z6Mk...replace-me"]
 
@@ -29,6 +32,9 @@ grant_validity_days = 365
 visibility = "public"
 # Show member counts on the landing page even when the directory is restricted.
 show_counts = true
+# Levels of member networks a federated search follows (0 disables it). A member network
+# is reached at the `url` in its entry profile (`nnm profile <did> --url …`).
+federate_depth = 3
 
 # Roles members register groups for. A required role must have a registered group before
 # a party's acknowledgement (its membership) is accepted.
@@ -45,3 +51,14 @@ description = "Where each member wants network notices delivered"
 accept = true      # relay broadcasts from parent networks into this network's groups
 max_hops = 8
 ttl_hours = 72
+max_attempts = 8           # delivery attempts per group before giving up
+retry_base_seconds = 30    # first retry delay; doubles each attempt, capped at an hour
+
+# Rooms the network opens for a role. A person gets a short-lived pass by presenting their
+# group's membership credential and the chain of group registrations up to this network.
+[[rooms]]
+id = "pandemic"
+name = "Pandemic Response"
+role = "admins"
+description = "Coordination room for every member's administrators"
+pass_minutes = 60

@@ -25,6 +25,10 @@ pub struct Config {
     /// DIDs allowed to administer the network: the operators' NNM identities.
     #[serde(default)]
     pub admins: Vec<String>,
+    /// How long a fetched status list (of a community or member network) is trusted before
+    /// refetching. A revocation elsewhere can take this long to be seen here.
+    #[serde(default = "default_status_cache")]
+    pub status_cache_seconds: i64,
     /// A DID resolver sidecar. Unset: resolve directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver_url: Option<String>,
@@ -38,6 +42,9 @@ pub struct Config {
     pub roles: Vec<RoleDef>,
     #[serde(default)]
     pub relay: RelayConfig,
+    /// Rooms the network opens for a role (design §5.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<crate::rooms::RoomDef>,
     /// The VTA-provisioned identity. Absent: development `did:key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<ProvisionedIdentity>,
@@ -99,6 +106,12 @@ pub struct RelayConfig {
     /// Lifetime of a broadcast this network originates, in hours.
     #[serde(default = "default_ttl_hours")]
     pub ttl_hours: i64,
+    /// Delivery attempts per group before giving up (the first included).
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+    /// First retry delay in seconds; doubles each attempt, capped at an hour.
+    #[serde(default = "default_retry_base")]
+    pub retry_base_seconds: i64,
 }
 
 impl Default for RelayConfig {
@@ -107,6 +120,8 @@ impl Default for RelayConfig {
             accept: true,
             max_hops: DEFAULT_MAX_HOPS,
             ttl_hours: default_ttl_hours(),
+            max_attempts: default_max_attempts(),
+            retry_base_seconds: default_retry_base(),
         }
     }
 }
@@ -119,6 +134,14 @@ fn default_ttl_hours() -> i64 {
     72
 }
 
+fn default_max_attempts() -> u32 {
+    8
+}
+
+fn default_retry_base() -> i64 {
+    30
+}
+
 /// Who can see the member directory (and the index and graph, which publish the same set).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,6 +152,9 @@ pub struct DirectoryConfig {
     /// Show member counts on the landing page even when the directory is restricted.
     #[serde(default = "default_true")]
     pub show_counts: bool,
+    /// How many levels of member networks a federated search follows. 0 disables it.
+    #[serde(default = "default_federate_depth")]
+    pub federate_depth: usize,
 }
 
 impl Default for DirectoryConfig {
@@ -136,12 +162,21 @@ impl Default for DirectoryConfig {
         Self {
             visibility: Visibility::default(),
             show_counts: true,
+            federate_depth: default_federate_depth(),
         }
     }
 }
 
+fn default_federate_depth() -> usize {
+    3
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn default_status_cache() -> i64 {
+    300
 }
 
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8400";
@@ -184,6 +219,26 @@ impl Config {
             }
             if !seen.insert(&role.name) {
                 errors.push(format!("roles: {:?} is defined twice", role.name));
+            }
+        }
+        for room in &self.rooms {
+            if !vtn_core::groups::valid_role_name(&room.id) {
+                errors.push(format!(
+                    "rooms: id {:?} must be lowercase letters, digits, '-' or '_'",
+                    room.id
+                ));
+            }
+            if !self.roles.iter().any(|r| r.name == room.role) {
+                errors.push(format!(
+                    "rooms: {:?} is for role {:?}, which is not defined",
+                    room.id, room.role
+                ));
+            }
+            if room.pass_minutes <= 0 || room.pass_minutes > 24 * 60 {
+                errors.push(format!(
+                    "rooms: {:?} pass_minutes must be 1..=1440",
+                    room.id
+                ));
             }
         }
         if self.base_url.ends_with('/') {

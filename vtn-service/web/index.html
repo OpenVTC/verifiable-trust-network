@@ -49,6 +49,10 @@
   .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
     padding: 8px 12px; cursor: pointer; }
   .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .fed { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+  .via { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .via b { color: var(--text); font-weight: 600; }
+  .warn { font-size: 13px; color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
   .count { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
   ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   li.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -81,6 +85,26 @@
   .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; }
   footer { margin-top: 40px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
   .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+  .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+    background: var(--surface); margin-bottom: 16px; }
+  .tabs button { border: 0; background: none; font: inherit; padding: 8px 16px; color: var(--muted); cursor: pointer; }
+  .tabs button[aria-selected=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .graph-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  #graph-svg { display: block; width: 100%; height: 560px; touch-action: manipulation; }
+  #graph-svg text { font: 11px system-ui, sans-serif; fill: var(--text); pointer-events: none; }
+  #graph-svg .container-label { fill: var(--muted); font-size: 11px; }
+  #graph-svg .node { cursor: pointer; }
+  #graph-svg .node:focus { outline: none; }
+  #graph-svg .node:focus circle, #graph-svg .node.sel circle { stroke-width: 3.5; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); padding: 10px 14px;
+    border-top: 1px solid var(--border); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid; }
+  .detail { margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .detail h3 { margin: 0 0 4px; font-size: 16px; }
+  .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); border-radius: 8px; padding: 10px;
+    overflow: auto; max-height: 260px; margin: 6px 0 0; }
+  .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -99,6 +123,27 @@
   <section class="stats" id="stats" aria-label="Network size"></section>
   <p class="session hidden" id="session"></p>
 
+  <div class="tabs hidden" role="tablist" id="tabs">
+    <button type="button" role="tab" aria-selected="true" data-tab="directory">Directory</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="graph">Trust graph</button>
+  </div>
+
+  <section id="graph" class="hidden" aria-label="Trust graph">
+    <div class="graph-wrap">
+      <svg id="graph-svg" role="img" aria-label="The network's DTG graph"></svg>
+      <div class="legend">
+        <span><i style="border-color: var(--ok)"></i>Grant / acknowledgement</span>
+        <span><i style="border-color: var(--muted); border-top-style: dashed"></i>Listed, not acknowledged</span>
+        <span><i style="border-color: var(--bad); border-top-style: dashed"></i>Repudiated</span>
+        <span><i style="border-color: var(--info)"></i>Suspended</span>
+        <span><i style="border-color: var(--border)"></i>Revoked</span>
+        <span>Each line is two halves: the network's grant, then the member's acknowledgement.</span>
+        <button class="btn" type="button" id="expand-all">Expand member networks</button>
+      </div>
+    </div>
+    <div class="detail" id="graph-detail">Select a node to see the credentials that are its evidence.</div>
+  </section>
+
   <section id="directory" class="hidden" aria-label="Member directory">
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search by name, tag, description or DID" aria-label="Search the directory" autocomplete="off">
@@ -107,12 +152,14 @@
         <button type="button" data-state="members" aria-pressed="false">Members</button>
         <button type="button" data-state="listed" aria-pressed="false">Not acknowledged</button>
       </div>
+      <label class="fed" id="fed-wrap"><input type="checkbox" id="fed"> Include member networks</label>
       <div class="seg" role="group" aria-label="Kind">
         <button type="button" data-kind="all" aria-pressed="true">All</button>
         <button type="button" data-kind="community" aria-pressed="false">Communities</button>
         <button type="button" data-kind="network" aria-pressed="false">Networks</button>
       </div>
     </div>
+    <p class="warn hidden" id="unreachable"></p>
     <p class="count" id="count" aria-live="polite"></p>
     <ul class="list" id="list"></ul>
   </section>
@@ -120,8 +167,15 @@
   <section id="restricted" class="notice hidden">
     <h2 id="restricted-title">Members-only directory</h2>
     <p id="restricted-text"></p>
+    <button class="btn" type="button" id="wallet-sign-in">Sign in with a wallet</button>
+    <div id="sign-in-panel" class="hidden">
+      <p>Open this link in your wallet, or sign it with the NNM (<code>nnm login '&lt;link&gt;'</code>). This page continues once it is signed.</p>
+      <p><a id="sign-in-link" href="#">Open in wallet</a> <button class="copy" type="button" id="copy-link">Copy link</button></p>
+      <p class="did" id="sign-in-uri"></p>
+      <p id="sign-in-status" aria-live="polite">Waiting for a signature…</p>
+    </div>
     <details>
-      <summary>Signed in with your community wallet or the NNM? Use a session token.</summary>
+      <summary>Have a session token? Use it instead.</summary>
       <input id="token" type="password" placeholder="Session token" autocomplete="off" aria-label="Session token">
       <button class="btn" id="use-token" type="button">Open the directory</button>
     </details>
@@ -138,7 +192,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const TOKEN_KEY = "vtn-session";
-  const state = { rows: [], q: "", member: "all", kind: "all" };
+  const state = { rows: [], q: "", member: "all", kind: "all", federated: false, own: [] };
 
   function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } }
   function setToken(t) { try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {} }
@@ -193,13 +247,22 @@
       el("span", { class: "badge b-kind" }, r.kind === "network" ? "Network" : "Community"),
       el("span", { class: "badge " + cls }, label));
     const li = el("li", { class: "card" + (r.acknowledged ? "" : " unack") }, head);
+    if (r.path && r.path.length) {
+      const via = el("div", { class: "via" }, "Listed by ");
+      r.path.forEach((h, i) => {
+        if (i) via.append(" \u2192 ");
+        via.append(el("b", {}, h.name || h.network));
+        if (!h.acknowledged) via.append(" (not acknowledged)");
+      });
+      li.append(via);
+    }
     if (r.description) li.append(el("p", {}, r.description));
     if (r.tags && r.tags.length) li.append(el("div", { class: "tags" }, ...r.tags.map((t) => el("span", { class: "tag" }, t))));
     const links = el("div", { class: "links" }, el("span", { class: "did" }, r.did));
     const site = r.url && safeHref(r.url);
     if (site) links.append(el("a", { href: site, rel: "noopener noreferrer" }, r.kind === "network" ? "Visit network" : "Website"));
-    if (r.listingId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
-    if (r.grantId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
+    if (r.listingId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
+    if (r.grantId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
     li.append(links);
     return li;
   }
@@ -245,12 +308,25 @@
     }
   }
 
+  async function loadFederated() {
+    const res = await get("/v1/directory/federated", true);
+    const warn = $("unreachable");
+    if (res.status !== 200 || !res.body) { warn.textContent = "Member networks could not be searched."; warn.classList.remove("hidden"); return; }
+    state.rows = res.body.results.map((r) => Object.assign({}, r, { path: r.path }));
+    const n = res.body.unreachable.length;
+    warn.textContent = n ? `${n} member network${n === 1 ? "" : "s"} could not be searched (restricted or unreachable); their entries are not shown.` : "";
+    warn.classList.toggle("hidden", !n);
+    renderList();
+  }
+
   async function loadDirectory(visibility) {
     const res = await get("/v1/directory", true);
     if (res.status === 200 && Array.isArray(res.body)) {
       state.rows = res.body;
+      state.own = res.body;
       $("restricted").classList.add("hidden");
       $("directory").classList.remove("hidden");
+      $("tabs").classList.remove("hidden");
       renderList();
       return;
     }
@@ -270,6 +346,153 @@
     box.classList.remove("hidden");
   }
 
+
+  // ------------------------------------------------------------------ graph
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const graphState = { root: null, expanded: {}, selected: null, loaded: false };
+
+  function svg(tag, attrs = {}) {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  }
+
+  const STATUS_COLOR = { valid: "var(--ok)", unchecked: "var(--ok)", suspended: "var(--info)", revoked: "var(--border)" };
+  const STATE_COLOR = { acknowledged: "var(--ok)", listed: "var(--warn)", repudiated: "var(--bad)", suspended: "var(--info)" };
+
+  function evidence(graph, owner, did) {
+    const pick = (role) => graph.edges.find((e) => e.role === role &&
+      ((e.source === owner && e.target === did) || (e.source === did && e.target === owner)));
+    return { listing: pick("listing"), grant: pick("grant"), acknowledgement: pick("acknowledgement"), repudiation: pick("repudiation") };
+  }
+
+  function drawPair(g, from, to, ev) {
+    const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+    const line = (a, b, color, dashed) => g.append(svg("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      stroke: color, "stroke-width": 2, "stroke-dasharray": dashed ? "5 4" : "" }));
+    if (ev.repudiation) return line(from, to, "var(--bad)", true);
+    if (ev.grant && ev.acknowledgement) {
+      line(from, mid, STATUS_COLOR[ev.grant.status] || "var(--ok)", false);
+      line(mid, to, STATUS_COLOR[ev.acknowledgement.status] || "var(--ok)", false);
+      return;
+    }
+    const listed = ev.listing;
+    line(from, to, listed && listed.status === "revoked" ? "var(--border)" : "var(--muted)", true);
+  }
+
+  function drawNode(g, node, pos, owner, graph, expandable) {
+    const r = node.root ? 18 : node.kind === "network" ? 12 : 8;
+    const group = svg("g", { class: "node" + (graphState.selected === node.id ? " sel" : ""), tabindex: "0", role: "button" });
+    group.setAttribute("aria-label", (node.label || node.id) + (node.state ? ", " + node.state : ""));
+    group.append(svg("circle", { cx: pos.x, cy: pos.y, r,
+      fill: node.kind === "network" ? "var(--accent-soft)" : "var(--surface-2)",
+      stroke: node.root ? "var(--accent)" : (STATE_COLOR[node.state] || "var(--muted)"), "stroke-width": 2 }));
+    const label = (node.label || node.id).slice(0, 26);
+    const t = svg("text", { x: pos.x, y: pos.y + r + 13, "text-anchor": "middle" });
+    t.textContent = label;
+    group.append(t);
+    const select = () => { graphState.selected = node.id; showDetail(node, owner, graph, expandable); renderGraph(); };
+    group.addEventListener("click", select);
+    group.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); } });
+    g.append(group);
+  }
+
+  function showDetail(node, owner, graph, expandable) {
+    const box = $("graph-detail");
+    box.replaceChildren(el("h3", {}, node.label || node.id), el("div", { class: "did" }, node.id));
+    if (node.state) box.append(el("p", {}, `${node.kind === "network" ? "Network" : "Community"} \u00b7 ${STATE_BADGE[node.state]?.[0] || node.state}`));
+    if (owner) {
+      const ev = evidence(graph, owner, node.id);
+      for (const [name, edge] of Object.entries(ev)) {
+        if (!edge) continue;
+        const d = el("details", {}, el("summary", {}, `${name[0].toUpperCase() + name.slice(1)} \u00b7 ${edge.credType} \u00b7 ${edge.status}`));
+        const pre = el("pre");
+        pre.textContent = JSON.stringify(edge.credential, null, 2);
+        d.append(pre);
+        box.append(d);
+      }
+    }
+    if (expandable && !graphState.expanded[node.id]) {
+      const b = el("button", { class: "btn", type: "button" }, "Expand this network");
+      b.addEventListener("click", async () => {
+        b.disabled = true; b.textContent = "Loading\u2026";
+        const res = await get("/v1/graph/member/" + encodeURIComponent(node.id), true);
+        if (res.status === 200) { graphState.expanded[node.id] = res.body; renderGraph(); showDetail(node, owner, graph, false); }
+        else { b.textContent = "Could not load: " + (res.body?.message || res.status); }
+      });
+      box.append(el("p", {}, b));
+    }
+  }
+
+  function renderGraph() {
+    const root = graphState.root;
+    const canvas = $("graph-svg");
+    if (!root) return;
+    const w = canvas.clientWidth || 900, h = canvas.clientHeight || 560;
+    canvas.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    canvas.replaceChildren();
+    const edges = svg("g"), nodes = svg("g"), containers = svg("g");
+    canvas.append(containers, edges, nodes);
+    const centre = { x: w / 2, y: h / 2 };
+    const members = root.nodes.filter((n) => !n.root);
+    const ring = Math.max(90, Math.min(w, h) * 0.34);
+    members.forEach((n, i) => {
+      const a = (2 * Math.PI * i) / Math.max(members.length, 1) - Math.PI / 2;
+      const pos = { x: centre.x + ring * Math.cos(a), y: centre.y + ring * Math.sin(a) };
+      drawPair(edges, centre, pos, evidence(root, root.nodes[0].id, n.id));
+      const sub = graphState.expanded[n.id];
+      if (sub) {
+        // A member network's own entries, inside its boundary: a list of lists, never flattened.
+        const kids = sub.nodes.filter((k) => !k.root);
+        const r2 = 62 + kids.length * 5;
+        const bound = svg("circle", { cx: pos.x, cy: pos.y, r: r2 + 22, fill: "none", stroke: "var(--border)", "stroke-dasharray": "4 4" });
+        containers.append(bound);
+        const cap = svg("text", { x: pos.x, y: pos.y - r2 - 28, "text-anchor": "middle", class: "container-label" });
+        cap.textContent = (sub.nodes[0].label || "") + "'s entries";
+        containers.append(cap);
+        kids.forEach((k, j) => {
+          // Offset so no child sits on the line back to the parent network.
+          const b = (2 * Math.PI * (j + 0.5)) / kids.length + a;
+          const kp = { x: pos.x + r2 * Math.cos(b), y: pos.y + r2 * Math.sin(b) };
+          drawPair(edges, pos, kp, evidence(sub, n.id, k.id));
+          drawNode(nodes, k, kp, n.id, sub, false);
+        });
+      }
+      drawNode(nodes, n, pos, root.nodes[0].id, root, n.kind === "network" && n.state === "acknowledged" && !!n.url);
+    });
+    drawNode(nodes, root.nodes[0], centre, null, root, false);
+  }
+
+  async function expandAll() {
+    const root = graphState.root;
+    if (!root) return;
+    const targets = root.nodes.filter((n) => !n.root && n.kind === "network" && n.state === "acknowledged" && n.url && !graphState.expanded[n.id]);
+    for (const n of targets) {
+      const res = await get("/v1/graph/member/" + encodeURIComponent(n.id), true);
+      if (res.status === 200) graphState.expanded[n.id] = res.body;
+    }
+    renderGraph();
+  }
+  $("expand-all").addEventListener("click", expandAll);
+
+  async function loadGraph() {
+    if (graphState.loaded) return renderGraph();
+    const res = await get("/v1/graph", true);
+    if (res.status !== 200) { $("graph-detail").textContent = "The graph is not visible to you."; return; }
+    graphState.root = res.body;
+    graphState.loaded = true;
+    renderGraph();
+  }
+
+  document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll("[data-tab]").forEach((o) => o.setAttribute("aria-selected", String(o === b)));
+    const graph = b.dataset.tab === "graph";
+    $("graph").classList.toggle("hidden", !graph);
+    $("directory").classList.toggle("hidden", graph);
+    if (graph) loadGraph();
+  }));
+  window.addEventListener("resize", () => { if (!$("graph").classList.contains("hidden")) renderGraph(); });
+
   async function init() {
     const { body: info } = await get("/.well-known/vtn");
     if (info) {
@@ -286,10 +509,15 @@
       $("did").textContent = info.did || "—";
     }
     const visibility = info?.directory?.visibility || "public";
+    if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
     await loadSession();
     const summary = await get("/v1/directory/summary", true);
     renderStats(summary.status === 200 ? summary.body : null);
     await loadDirectory(visibility);
+    if (location.hash.startsWith("#graph")) {
+      document.querySelector('[data-tab="graph"]').click();
+      if (location.hash === "#graph-expanded") { await loadGraph(); await expandAll(); }
+    }
   }
 
   let timer;
@@ -297,8 +525,37 @@
     clearTimeout(timer);
     timer = setTimeout(() => { state.q = e.target.value; renderList(); }, 120);
   });
+  $("fed").addEventListener("change", (e) => {
+    state.federated = e.target.checked;
+    if (state.federated) loadFederated();
+    else { state.rows = state.own; $("unreachable").classList.add("hidden"); renderList(); }
+  });
   bindSeg("state", "member");
   bindSeg("kind", "kind");
+  let pollTimer;
+  $("wallet-sign-in").addEventListener("click", async () => {
+    const res = await fetch("/v1/auth/login", { method: "POST", headers: { Accept: "application/json" } });
+    if (!res.ok) { $("sign-in-status").textContent = "Could not start a sign-in."; return; }
+    const start = await res.json();
+    const uri = "vtn-signin:?network=" + encodeURIComponent(start.audience) +
+      "&endpoint=" + encodeURIComponent(location.origin) + "&challenge=" + encodeURIComponent(start.challenge);
+    $("sign-in-link").href = uri;
+    $("sign-in-uri").textContent = uri;
+    $("sign-in-panel").classList.remove("hidden");
+    $("wallet-sign-in").classList.add("hidden");
+    const deadline = Date.parse(start.expiresAt);
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      if (Date.now() > deadline) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in expired. Start again."; $("wallet-sign-in").classList.remove("hidden"); return; }
+      const poll = await fetch(`/v1/auth/login/${encodeURIComponent(start.login)}?secret=${encodeURIComponent(start.pollSecret)}`);
+      if (!poll.ok) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in was not accepted."; return; }
+      const body = await poll.json();
+      if (body.status === "complete") { clearInterval(pollTimer); setToken(body.session.token); location.reload(); }
+    }, 2000);
+  });
+  $("copy-link").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("sign-in-uri").textContent); $("copy-link").textContent = "Copied"; } catch {}
+  });
   $("use-token").addEventListener("click", () => {
     const t = $("token").value.trim();
     if (t) { setToken(t); location.reload(); }

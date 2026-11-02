@@ -204,7 +204,9 @@ pub enum DeliveryStatus {
     Duplicate,
     /// The receiving network or group declined it.
     Refused,
-    /// Could not be delivered.
+    /// Could not be delivered yet; queued for retry.
+    Queued,
+    /// Could not be delivered, and retries are exhausted (or it was not retryable).
     Failed,
 }
 

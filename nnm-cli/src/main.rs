@@ -72,9 +72,20 @@ enum Command {
         /// Only acknowledged members.
         #[arg(long)]
         members_only: bool,
+        /// Also search member networks' indexes, showing the path to each result.
+        #[arg(long)]
+        federated: bool,
     },
     /// Print a session token, e.g. to open a restricted directory in the browser.
     Token,
+    /// Act as a wallet for a browser sign-in: sign the `vtn-signin:` link a landing page
+    /// shows, with this NNM's admin key. The page then signs in.
+    Login {
+        link: String,
+        /// A membership credential (JSON file) to present, to sign in as a member.
+        #[arg(long)]
+        membership: Option<PathBuf>,
+    },
     /// The roles members register groups for.
     Roles,
     /// Groups members registered, optionally for one role.
@@ -99,6 +110,14 @@ enum Command {
     },
     /// Broadcasts sent and relayed, or one with its receipts.
     Broadcasts { id: Option<String> },
+    /// The network's rooms.
+    Rooms,
+    /// Deliveries queued for retry.
+    Outbox {
+        /// Retry every queued delivery now.
+        #[arg(long)]
+        retry: bool,
+    },
     /// This network's memberships of other networks.
     #[command(subcommand)]
     Memberships(MembershipsCommand),
@@ -253,6 +272,22 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
+        Command::Login { link, membership } => {
+            let link = vtn_client::SignInLink::parse(&link)?;
+            let membership = match membership {
+                Some(p) => Some(serde_json::from_str(&std::fs::read_to_string(&p)?)?),
+                None => None,
+            };
+            let admin = profile.admin()?.identity()?;
+            let grant = link.complete(&admin, membership).await?;
+            println!(
+                "Signed in to {} as {} ({}). The page will continue.",
+                link.network,
+                admin.did(),
+                grant["role"].as_str().unwrap_or("?")
+            );
+            Ok(())
+        }
         command => admin_command(command, &profile, cli.network.as_deref()).await,
     }
 }
@@ -502,6 +537,47 @@ async fn admin_command(
             Ok(())
         }
         Command::Memberships(cmd) => memberships(&client, cmd).await,
+        Command::Rooms => {
+            for r in client
+                .get("/v1/rooms")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{:<16} {:<28} role {:<14} pass {} min",
+                    r["id"].as_str().unwrap_or("?"),
+                    r["name"].as_str().unwrap_or("?"),
+                    r["role"].as_str().unwrap_or("?"),
+                    r["pass_minutes"]
+                );
+            }
+            Ok(())
+        }
+        Command::Outbox { retry } => {
+            if retry {
+                let r = client.post("/v1/admin/outbox/retry", &json!({})).await?;
+                println!("attempted {}", r["attempted"]);
+            }
+            for i in client
+                .get("/v1/admin/outbox")
+                .await?
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "{}  attempt {:<2} next {}  {}  {}",
+                    i["messageId"].as_str().unwrap_or("?"),
+                    i["attempts"],
+                    i["nextAttempt"].as_str().unwrap_or("?"),
+                    i["member"].as_str().unwrap_or("?"),
+                    i["lastError"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
         Command::Token => {
             println!("{}", client.token().unwrap_or_default());
             eprintln!("Valid for an hour. Paste it into the landing page's session-token box.");
@@ -511,6 +587,7 @@ async fn admin_command(
             query,
             kind,
             members_only,
+            federated,
         } => {
             let mut params = vec![format!("members_only={members_only}")];
             if !query.is_empty() {
@@ -519,21 +596,47 @@ async fn admin_command(
             if let Some(kind) = kind {
                 params.push(format!("kind={}", kind.as_str()));
             }
-            let rows = client
-                .get(&format!("/v1/directory?{}", params.join("&")))
-                .await?;
+            let path = if federated {
+                "/v1/directory/federated"
+            } else {
+                "/v1/directory"
+            };
+            let found = client.get(&format!("{path}?{}", params.join("&"))).await?;
+            let rows = if federated {
+                found["results"].clone()
+            } else {
+                found.clone()
+            };
+            for u in found["unreachable"].as_array().into_iter().flatten() {
+                eprintln!(
+                    "indeterminate: {} ({})",
+                    u["network"].as_str().unwrap_or("?"),
+                    u["reason"].as_str().unwrap_or("?")
+                );
+            }
             for r in rows.as_array().into_iter().flatten() {
                 let state = if r["acknowledged"] == true {
                     "member".to_string()
                 } else {
                     r["state"].as_str().unwrap_or("?").to_string()
                 };
+                let via: Vec<&str> = r["path"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|h| h["name"].as_str().or(h["network"].as_str()).unwrap_or("?"))
+                    .collect();
                 println!(
-                    "{:<12} {:<10} {:<32} {}",
+                    "{:<12} {:<10} {:<32} {}{}",
                     state,
                     r["kind"].as_str().unwrap_or("?"),
                     r["label"].as_str().unwrap_or("-"),
-                    r["did"].as_str().unwrap_or("?")
+                    r["did"].as_str().unwrap_or("?"),
+                    if via.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  via {}", via.join(" > "))
+                    }
                 );
             }
             Ok(())
@@ -620,7 +723,9 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Keys(_) | Command::Networks(_) => unreachable!("handled above"),
+        Command::Keys(_) | Command::Networks(_) | Command::Login { .. } => {
+            unreachable!("handled above")
+        }
     }
 }
 

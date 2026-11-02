@@ -97,8 +97,38 @@ pub fn authentication_document(did: &str, challenge: &Challenge) -> Value {
 }
 
 struct Pending {
-    did: String,
+    /// `None` for a browser login: the page does not know who will sign.
+    did: Option<String>,
+    /// The browser login this challenge belongs to, if any.
+    login: Option<String>,
     expires_at: DateTime<Utc>,
+}
+
+/// A browser login waiting for a wallet to sign its challenge (A13).
+struct Login {
+    poll_secret: String,
+    expires_at: DateTime<Utc>,
+    grant: Option<SessionGrant>,
+}
+
+/// What the page needs to hand a sign-in to a wallet.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginStart {
+    pub login: String,
+    /// Only the page that started the login can collect its session.
+    pub poll_secret: String,
+    pub challenge: String,
+    pub audience: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// A browser login's progress.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum LoginStatus {
+    Pending,
+    Complete { session: SessionGrant },
 }
 
 struct Session {
@@ -112,6 +142,7 @@ pub struct Auth {
     resolver: Arc<dyn KeyResolver>,
     challenges: Mutex<HashMap<String, Pending>>,
     sessions: Mutex<HashMap<String, Session>>,
+    logins: Mutex<HashMap<String, Login>>,
 }
 
 impl Auth {
@@ -122,6 +153,7 @@ impl Auth {
             resolver,
             challenges: Mutex::default(),
             sessions: Mutex::default(),
+            logins: Mutex::default(),
         }
     }
 
@@ -148,7 +180,8 @@ impl Auth {
         challenges.insert(
             challenge.clone(),
             Pending {
-                did: did.to_string(),
+                did: Some(did.to_string()),
+                login: None,
                 expires_at,
             },
         );
@@ -159,9 +192,72 @@ impl Auth {
         })
     }
 
-    /// Check a signed sign-in document: the challenge is live and bound to its DID, and the
-    /// DID signed it for `authentication`. Returns the DID; the caller decides the role.
-    pub async fn verify_sign_in(&self, document: &Value) -> ApiResult<String> {
+    /// Start a browser login: a challenge any DID may sign, and a poll secret for the page.
+    pub async fn start_login(&self) -> ApiResult<LoginStart> {
+        let now = Utc::now();
+        let mut challenges = self.challenges.lock().await;
+        challenges.retain(|_, p| p.expires_at > now);
+        let mut logins = self.logins.lock().await;
+        logins.retain(|_, l| l.expires_at > now);
+        if challenges.len() >= MAX_PENDING_CHALLENGES || logins.len() >= MAX_PENDING_CHALLENGES {
+            return Err(ApiError::BadRequest("too many pending sign-ins".into()));
+        }
+        let (login, poll_secret, challenge) = (random_token(), random_token(), random_token());
+        let expires_at = now + CHALLENGE_TTL;
+        challenges.insert(
+            challenge.clone(),
+            Pending {
+                did: None,
+                login: Some(login.clone()),
+                expires_at,
+            },
+        );
+        logins.insert(
+            login.clone(),
+            Login {
+                poll_secret: poll_secret.clone(),
+                expires_at,
+                grant: None,
+            },
+        );
+        Ok(LoginStart {
+            login,
+            poll_secret,
+            challenge,
+            audience: self.network_did.clone(),
+            expires_at,
+        })
+    }
+
+    /// The page collects its login. A completed login is handed over once.
+    pub async fn poll_login(&self, login: &str, poll_secret: &str) -> ApiResult<LoginStatus> {
+        let mut logins = self.logins.lock().await;
+        let entry = logins.get(login).ok_or(ApiError::Unauthorized)?;
+        if !constant_time_eq(entry.poll_secret.as_bytes(), poll_secret.as_bytes())
+            || entry.expires_at <= Utc::now()
+        {
+            return Err(ApiError::Unauthorized);
+        }
+        match &entry.grant {
+            None => Ok(LoginStatus::Pending),
+            Some(_) => {
+                let grant = logins.remove(login).and_then(|l| l.grant).expect("checked");
+                Ok(LoginStatus::Complete { session: grant })
+            }
+        }
+    }
+
+    /// Attach a session opened for a browser login to that login.
+    pub async fn complete_login(&self, login: &str, grant: &SessionGrant) {
+        if let Some(entry) = self.logins.lock().await.get_mut(login) {
+            entry.grant = Some(grant.clone());
+        }
+    }
+
+    /// Check a signed sign-in document: the challenge is live (and bound to its DID, unless
+    /// it is a browser login's), and the DID signed it for `authentication`. Returns the DID
+    /// and the browser login it completes, if any; the caller decides the role.
+    pub async fn verify_sign_in(&self, document: &Value) -> ApiResult<(String, Option<String>)> {
         let field = |name: &str| {
             document
                 .get(name)
@@ -185,7 +281,7 @@ impl Auth {
             .await
             .remove(challenge)
             .ok_or(ApiError::Unauthorized)?;
-        if pending.did != did || pending.expires_at <= Utc::now() {
+        if pending.did.as_deref().is_some_and(|d| d != did) || pending.expires_at <= Utc::now() {
             return Err(ApiError::Unauthorized);
         }
         verify_document(document, did, AUTHENTICATION, self.resolver.as_ref())
@@ -194,7 +290,7 @@ impl Auth {
                 tracing::info!(did, error = %e, "sign-in refused");
                 ApiError::Unauthorized
             })?;
-        Ok(did.to_string())
+        Ok((did.to_string(), pending.login))
     }
 
     pub async fn open_session(&self, principal: Principal) -> SessionGrant {
@@ -233,6 +329,10 @@ impl Auth {
             _ => Err(ApiError::Unauthorized),
         }
     }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn random_token() -> String {

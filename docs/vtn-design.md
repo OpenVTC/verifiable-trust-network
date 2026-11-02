@@ -328,19 +328,14 @@ support goes in `cnm-cli`.
 
 ## 11. Delivery plan
 
-**Progress (2026-11-02):** Phase 1 network-side is done, and most of phase 2 too:
-- `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli` are built.
-- The network is VTA-provisioned and admins sign in by DID.
-- The landing page has a directory with configurable visibility.
-- Nested membership works: a VTN can join a parent.
-- Roles, required-role admission, and cascading broadcast with signed hop chains and receipts are in (A14, A15).
+**Progress (2026-11-02):** Phases 1–4 are implemented for the network side, in `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli`:
+- VTA-provisioned identity, and admin, member and wallet sign-in by DID.
+- Listing and membership lifecycle with status lists.
+- Directory with visibility, federated search, and the trust graph view.
+- Nested membership, roles, required-role admission, and cascading broadcast with a durable retry queue.
+- Network room passes on chained group evidence.
 
-Not yet done:
-- the VTC-side network-membership module
-- federated search (phase 3)
-- the graph UI (phase 3)
-- network data rooms (phase 4)
-- a durable delivery queue
+Outside this repo: the VTC-side network-membership module (in VTI) and TSP/DIDComm delivery. Assumptions on open questions are A1–A18 in `docs/assumptions.md`.
 
 | Phase | Scope | Exit criterion |
 |---|---|---|

@@ -72,6 +72,9 @@ async fn main() -> anyhow::Result<()> {
                 provisioned = config.identity.is_some(),
                 "VTN starting"
             );
+            state
+                .network
+                .spawn_retry_worker(std::time::Duration::from_secs(15));
             let listener = tokio::net::TcpListener::bind(&config.listen).await?;
             axum::serve(listener, vtn_service::routes::router(state))
                 .with_graceful_shutdown(async {
