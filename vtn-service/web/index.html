@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verifiable Trust Network</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f0f0ec; --border: #e2e2dc;
+    --text: #1c1c1a; --muted: #6b6b64; --accent: #2f5d50; --accent-soft: #e3eeea;
+    --ok: #1f7a4d; --ok-soft: #e2f3ea; --warn: #8a5a00; --warn-soft: #fbf0d9;
+    --bad: #a33a2f; --bad-soft: #f8e4e1; --info: #3d5a8a; --info-soft: #e6ecf6;
+    --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --surface: #1d1d1b; --surface-2: #262623; --border: #33332f;
+      --text: #ecece6; --muted: #a2a299; --accent: #8cc7b4; --accent-soft: #1f3530;
+      --ok: #6fd3a0; --ok-soft: #173326; --warn: #e9b95a; --warn-soft: #3a2d12;
+      --bad: #f08c80; --bad-soft: #3b1f1b; --info: #9db8e8; --info-soft: #1f2a3d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  header h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header p.desc { margin: 0 0 14px; color: var(--muted); max-width: 70ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+  .meta b { color: var(--text); font-weight: 600; }
+  .did { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; word-break: break-all; }
+  .meta > *, .links > *, .row > * { min-width: 0; }
+  button.copy { border: 0; background: none; color: var(--accent); cursor: pointer;
+    font: inherit; font-size: 12px; padding: 0 2px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+    gap: 10px; margin: 26px 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; }
+  .stat .n { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  input[type=search] { flex: 1 1 260px; min-width: 0; padding: 10px 12px; font: inherit;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+    color: var(--text); }
+  input[type=search]:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent);
+    outline-offset: 1px; }
+  .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; background: var(--surface); }
+  .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
+    padding: 8px 12px; cursor: pointer; }
+  .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .count { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+  ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  li.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; }
+  li.card.unack { border-style: dashed; }
+  .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+  .name { font-weight: 620; font-size: 16px; margin-right: auto; overflow-wrap: anywhere; }
+  .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; }
+  .b-kind { background: var(--surface-2); color: var(--muted); }
+  .b-ack { background: var(--ok-soft); color: var(--ok); }
+  .b-listed { background: var(--warn-soft); color: var(--warn); }
+  .b-repudiated { background: var(--bad-soft); color: var(--bad); }
+  .b-suspended { background: var(--info-soft); color: var(--info); }
+  .card p { margin: 6px 0 0; color: var(--muted); }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tag { font-size: 12px; background: var(--accent-soft); color: var(--accent); padding: 1px 8px;
+    border-radius: 6px; }
+  .links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 13px; }
+  a { color: var(--accent); }
+  .notice { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px; }
+  .notice h2 { margin: 0 0 6px; font-size: 18px; }
+  .notice p { margin: 0 0 10px; color: var(--muted); }
+  details { margin-top: 10px; font-size: 13px; }
+  details input { width: 100%; margin-top: 8px; padding: 8px; font-family: var(--mono); font-size: 12px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+  details button { margin-top: 8px; }
+  .btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; }
+  footer { margin-top: 40px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="name">Verifiable Trust Network</h1>
+    <p class="desc" id="desc"></p>
+    <div class="meta">
+      <span>Owner <b id="owner">—</b></span>
+      <span>Governance <a id="framework" href="#" rel="noopener">—</a></span>
+      <span>DID <span class="did" id="did">—</span> <button class="copy" data-copy-from="did" type="button">Copy</button></span>
+    </div>
+  </header>
+
+  <section class="stats" id="stats" aria-label="Network size"></section>
+  <p class="session hidden" id="session"></p>
+
+  <section id="directory" class="hidden" aria-label="Member directory">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search by name, tag, description or DID" aria-label="Search the directory" autocomplete="off">
+      <div class="seg" role="group" aria-label="Membership">
+        <button type="button" data-state="all" aria-pressed="true">All</button>
+        <button type="button" data-state="members" aria-pressed="false">Members</button>
+        <button type="button" data-state="listed" aria-pressed="false">Not acknowledged</button>
+      </div>
+      <div class="seg" role="group" aria-label="Kind">
+        <button type="button" data-kind="all" aria-pressed="true">All</button>
+        <button type="button" data-kind="community" aria-pressed="false">Communities</button>
+        <button type="button" data-kind="network" aria-pressed="false">Networks</button>
+      </div>
+    </div>
+    <p class="count" id="count" aria-live="polite"></p>
+    <ul class="list" id="list"></ul>
+  </section>
+
+  <section id="restricted" class="notice hidden">
+    <h2 id="restricted-title">Members-only directory</h2>
+    <p id="restricted-text"></p>
+    <details>
+      <summary>Signed in with your community wallet or the NNM? Use a session token.</summary>
+      <input id="token" type="password" placeholder="Session token" autocomplete="off" aria-label="Session token">
+      <button class="btn" id="use-token" type="button">Open the directory</button>
+    </details>
+  </section>
+
+  <footer>
+    <span>Listing is one-sided. Only <b>members</b> have acknowledged their entry (VTI-VTN-011, 013).</span>
+    <a href="/v1/index">Signed index</a>
+    <a href="/v1/graph">DTG graph</a>
+    <a href="/.well-known/vtn">Network profile</a>
+  </footer>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const TOKEN_KEY = "vtn-session";
+  const state = { rows: [], q: "", member: "all", kind: "all" };
+
+  function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } }
+  function setToken(t) { try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {} }
+
+  async function get(path, auth) {
+    const headers = { Accept: "application/json" };
+    const t = auth && token();
+    if (t) headers.Authorization = "Bearer " + t;
+    const res = await fetch(path, { headers });
+    const body = await res.json().catch(() => null);
+    return { status: res.status, body };
+  }
+
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v; else node.setAttribute(k, v);
+    }
+    for (const c of children) if (c != null) node.append(c);
+    return node;
+  }
+
+  function safeHref(url) {
+    try { const u = new URL(url, location.href); return /^https?:$/.test(u.protocol) ? u.href : null; }
+    catch { return null; }
+  }
+
+  const STATE_BADGE = {
+    acknowledged: ["Member", "b-ack"],
+    listed: ["Listed · not acknowledged", "b-listed"],
+    repudiated: ["Repudiated by the party", "b-repudiated"],
+    suspended: ["Suspended", "b-suspended"],
+  };
+
+  function stat(n, label) {
+    return el("div", { class: "stat" }, el("div", { class: "n" }, String(n)), el("div", { class: "l" }, label));
+  }
+
+  function renderStats(s) {
+    const box = $("stats");
+    box.replaceChildren();
+    if (!s) { box.classList.add("hidden"); return; }
+    box.classList.remove("hidden");
+    box.append(stat(s.acknowledged, "Members"), stat(s.communities, "Communities"),
+      stat(s.networks, "Networks"), stat(s.unacknowledged, "Listed, not acknowledged"));
+  }
+
+  function card(r) {
+    const [label, cls] = STATE_BADGE[r.state] || [r.state, "b-kind"];
+    const head = el("div", { class: "row" },
+      el("span", { class: "name" }, r.label || r.did),
+      el("span", { class: "badge b-kind" }, r.kind === "network" ? "Network" : "Community"),
+      el("span", { class: "badge " + cls }, label));
+    const li = el("li", { class: "card" + (r.acknowledged ? "" : " unack") }, head);
+    if (r.description) li.append(el("p", {}, r.description));
+    if (r.tags && r.tags.length) li.append(el("div", { class: "tags" }, ...r.tags.map((t) => el("span", { class: "tag" }, t))));
+    const links = el("div", { class: "links" }, el("span", { class: "did" }, r.did));
+    const site = r.url && safeHref(r.url);
+    if (site) links.append(el("a", { href: site, rel: "noopener noreferrer" }, r.kind === "network" ? "Visit network" : "Website"));
+    if (r.listingId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
+    if (r.grantId) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
+    li.append(links);
+    return li;
+  }
+
+  function matches(r) {
+    if (state.kind !== "all" && r.kind !== state.kind) return false;
+    if (state.member === "members" && !r.acknowledged) return false;
+    if (state.member === "listed" && r.acknowledged) return false;
+    const terms = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hay = [r.did, r.label, r.description, ...(r.tags || [])].filter(Boolean).join(" \u0000 ").toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  }
+
+  function renderList() {
+    const shown = state.rows.filter(matches);
+    const list = $("list");
+    list.replaceChildren(...shown.map(card));
+    if (!shown.length) list.append(el("li", { class: "empty" }, state.rows.length ? "No entries match." : "This network lists no one yet."));
+    $("count").textContent = shown.length === state.rows.length
+      ? `${state.rows.length} ${state.rows.length === 1 ? "entry" : "entries"}`
+      : `${shown.length} of ${state.rows.length} entries`;
+  }
+
+  function bindSeg(attr, key) {
+    document.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener("click", () => {
+      state[key] = b.dataset[attr];
+      document.querySelectorAll(`[data-${attr}]`).forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+      renderList();
+    }));
+  }
+
+  function showRestricted(visibility, signedIn) {
+    $("directory").classList.add("hidden");
+    $("restricted").classList.remove("hidden");
+    if (visibility === "admins") {
+      $("restricted-title").textContent = "Private directory";
+      $("restricted-text").textContent = "This network's directory is visible to its administrators only.";
+    } else {
+      $("restricted-title").textContent = "Members-only directory";
+      $("restricted-text").textContent = signedIn
+        ? "Your session does not give access to this directory."
+        : "This network's directory is visible to its members: a member community or network signed in as itself, or a person presenting a membership credential from a member community.";
+    }
+  }
+
+  async function loadDirectory(visibility) {
+    const res = await get("/v1/directory", true);
+    if (res.status === 200 && Array.isArray(res.body)) {
+      state.rows = res.body;
+      $("restricted").classList.add("hidden");
+      $("directory").classList.remove("hidden");
+      renderList();
+      return;
+    }
+    if (res.status === 401 && token()) setToken(null);
+    showRestricted(visibility, res.status === 403);
+  }
+
+  async function loadSession() {
+    if (!token()) return;
+    const res = await get("/v1/auth/session", true);
+    const box = $("session");
+    if (res.status !== 200) { setToken(null); return; }
+    box.replaceChildren("Signed in as ", el("span", { class: "did" }, res.body.did), " ");
+    const out = el("button", { class: "copy", type: "button" }, "Sign out");
+    out.addEventListener("click", () => { setToken(null); location.reload(); });
+    box.append(out);
+    box.classList.remove("hidden");
+  }
+
+  async function init() {
+    const { body: info } = await get("/.well-known/vtn");
+    if (info) {
+      const p = info.profile || {};
+      document.title = p.name || document.title;
+      $("name").textContent = p.name || "Verifiable Trust Network";
+      $("desc").textContent = p.description || "";
+      $("owner").textContent = p.owner || "—";
+      const fw = p.framework || {};
+      const fwLink = $("framework");
+      fwLink.textContent = fw.version ? `v${fw.version}` : "—";
+      const href = fw.iri && safeHref(fw.iri);
+      if (href) fwLink.href = href; else fwLink.removeAttribute("href");
+      $("did").textContent = info.did || "—";
+    }
+    const visibility = info?.directory?.visibility || "public";
+    await loadSession();
+    const summary = await get("/v1/directory/summary", true);
+    renderStats(summary.status === 200 ? summary.body : null);
+    await loadDirectory(visibility);
+  }
+
+  let timer;
+  $("q").addEventListener("input", (e) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { state.q = e.target.value; renderList(); }, 120);
+  });
+  bindSeg("state", "member");
+  bindSeg("kind", "kind");
+  $("use-token").addEventListener("click", () => {
+    const t = $("token").value.trim();
+    if (t) { setToken(t); location.reload(); }
+  });
+  document.querySelectorAll("[data-copy-from]").forEach((b) => b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($(b.dataset.copyFrom).textContent); b.textContent = "Copied"; }
+    catch { b.textContent = "Copy failed"; }
+    setTimeout(() => (b.textContent = "Copy"), 1500);
+  }));
+  init();
+})();
+</script>
+</body>
+</html>

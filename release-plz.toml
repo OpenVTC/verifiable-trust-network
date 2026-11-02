@@ -1,0 +1,11 @@
+# release-plz: versions and changelogs from conventional commits (see cliff.toml).
+#
+# Every crate is `publish = false` for now (workspace.package), so a release tags and
+# updates CHANGELOG.md without uploading anything. Publishing is decided per crate in its
+# Cargo.toml when a crate has a consumer outside this repo.
+
+[workspace]
+changelog_config = "cliff.toml"
+changelog_path = "CHANGELOG.md"
+semver_check = false
+git_release_enable = true

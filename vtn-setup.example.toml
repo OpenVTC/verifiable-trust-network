@@ -1,0 +1,36 @@
+# Setup file for `vtn setup --from vtn-setup.toml`: provisions the network's identity on a VTA.
+#
+#   1. vtn setup --setup-key-out setup-key.json --context vtn
+#   2. at the VTA (pnm, as an admin):
+#        pnm contexts create --id vtn --name "Verifiable Trust Network" \
+#          --admin-did <setup DID printed by step 1> --admin-expires 1h
+#        pnm did-templates create templates/vtn-host.json --context vtn
+#   3. vtn setup --from vtn-setup.toml
+#   4. vtn --config /srv/vtn/vtn.toml serve
+
+config_path    = "/srv/vtn/vtn.toml"
+base_url       = "https://whn.example.org"          # public HTTPS base of the VTN API
+vta_did        = "did:webvh:QmVTA...:vta.example.com"
+context        = "vtn"
+setup_key_file = "/srv/vtn/setup-key.json"
+# Where the did:webvh log is published: a registered DID-hosting server, or a URL you serve.
+# webvh_server = "hosting-1"
+url            = "https://whn.example.org/did"
+# The network's administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
+admins         = ["did:key:z6Mk...replace-me"]
+
+[secrets]                      # where the VTA-minted keys are kept (vti-secrets backends)
+backend = "keyring"
+# backend = "vault" / "aws" / "gcp" / "azure" / "kubernetes" ...
+
+[directory]
+visibility = "members"         # "public" | "members" | "admins"
+
+[network]
+name        = "World Health Network"
+description = "Curated network of national and regional health networks and communities"
+owner       = "World Health Network Secretariat"
+
+[network.framework]
+iri     = "https://whn.example.org/governance"
+version = "1.0"

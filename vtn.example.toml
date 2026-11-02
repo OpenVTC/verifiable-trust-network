@@ -1,0 +1,31 @@
+# Development configuration: a local did:key identity (`vtn init`), no VTA.
+# A production network is provisioned on a VTA with `vtn setup` (see vtn-setup.example.toml),
+# which writes vtn.toml for you, with [identity] and [secrets].
+listen = "127.0.0.1:8400"
+# Public base URL; status-list URLs inside issued credentials are built from it.
+base_url = "http://127.0.0.1:8400"
+# Holds the store, the identity seed and the admin token (created by `vtn init`).
+data_dir = "data/vtn"
+# Administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
+admins = ["did:key:z6Mk...replace-me"]
+
+[network]
+name = "World Health Network"
+description = "Curated network of national and regional health networks and communities"
+# Identified owner (VTI-VTN-002).
+owner = "World Health Network Secretariat"
+
+[network.framework]
+iri = "https://whn.example/governance"
+version = "1.0"
+
+[membership]
+# Validity of a membership grant; the member re-acknowledges after it.
+grant_validity_days = 365
+
+[directory]
+# Who can see the member directory, index and graph: "public", "members" (members of this
+# network, and admins) or "admins".
+visibility = "public"
+# Show member counts on the landing page even when the directory is restricted.
+show_counts = true
