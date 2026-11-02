@@ -643,6 +643,26 @@ async fn federated_search_follows_member_networks_with_paths() {
         "{found:#}"
     );
 
+    // The graph view expands a member network from its verified index.
+    let au_graph = VtnClient::new(&whn.url)
+        .get(&format!("/v1/graph/member/{}", encode_did(&au.did)))
+        .await
+        .unwrap();
+    assert_eq!(au_graph["nodes"][0]["id"], au.did);
+    assert!(
+        au_graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == nsw.did)
+    );
+    // Not for a network that never acknowledged.
+    let err = VtnClient::new(&whn.url)
+        .get(&format!("/v1/graph/member/{}", encode_did(&pending.did)))
+        .await
+        .unwrap_err();
+    assert_eq!(err.status(), Some(404));
+
     // Plain (non-federated) search sees only WHN's own entries.
     let own = VtnClient::new(&whn.url)
         .get("/v1/directory?q=vincent")

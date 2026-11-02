@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::index::NetworkIndex;
 use crate::model::{Entry, EntryKind, EntryState, NetworkProfile, StatusIndex};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,9 @@ pub struct Node {
     pub state: Option<EntryState>,
     /// `true` for the network this export belongs to.
     pub root: bool,
+    /// For a member network: where its own graph and index are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +128,7 @@ pub fn export<'a>(
         label: Some(profile.name.clone()),
         state: None,
         root: true,
+        url: None,
     }];
     let mut edges = Vec::new();
 
@@ -140,6 +145,7 @@ pub fn export<'a>(
             label: entry.label.clone(),
             state: Some(entry.state),
             root: false,
+            url: entry.profile.url.clone(),
         });
         edges.extend(edge(
             &entry.listing.credential,
@@ -162,6 +168,49 @@ pub fn export<'a>(
                 EdgeRole::Repudiation,
                 EdgeStatus::Unchecked,
             ));
+        }
+    }
+    Graph { nodes, edges }
+}
+
+/// The graph of another network, from its verified signed index. Its credentials' status
+/// is not held here, so every edge is `Unchecked`. A viewer that wants live status resolves
+/// it against that network's status lists.
+pub fn from_index(index: &NetworkIndex) -> Graph {
+    let mut nodes = vec![Node {
+        id: index.network.clone(),
+        kind: NodeKind::Network,
+        label: Some(index.name.clone()),
+        state: None,
+        root: true,
+        url: None,
+    }];
+    let mut edges = Vec::new();
+    for entry in &index.entries {
+        nodes.push(Node {
+            id: entry.did.clone(),
+            kind: match entry.kind {
+                EntryKind::Community => NodeKind::Community,
+                EntryKind::Network => NodeKind::Network,
+            },
+            label: entry.label.clone(),
+            state: Some(entry.state),
+            root: false,
+            url: entry.profile.url.clone(),
+        });
+        edges.extend(edge(
+            &entry.listing,
+            EdgeRole::Listing,
+            EdgeStatus::Unchecked,
+        ));
+        for (credential, role) in [
+            (&entry.grant, EdgeRole::Grant),
+            (&entry.acknowledgement, EdgeRole::Acknowledgement),
+            (&entry.repudiation, EdgeRole::Repudiation),
+        ] {
+            if let Some(c) = credential {
+                edges.extend(edge(c, role, EdgeStatus::Unchecked));
+            }
         }
     }
     Graph { nodes, edges }

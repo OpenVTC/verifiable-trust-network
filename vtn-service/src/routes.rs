@@ -59,6 +59,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/directory/federated", get(federated_directory))
         .route("/v1/index", get(index))
         .route("/v1/graph", get(public_graph))
+        .route("/v1/graph/member/{did}", get(member_graph))
         .route("/v1/credentials/{id}", get(credential))
         .route("/v1/entries/{did}", get(public_entry))
         .route("/v1/entries/{did}/offer", get(offer))
@@ -242,6 +243,15 @@ async fn index(State(s): State<AppState>, who: MaybePrincipal) -> ApiResult<Json
 async fn public_graph(State(s): State<AppState>, who: MaybePrincipal) -> ApiResult<Json<Graph>> {
     require_directory(&s, &who)?;
     Ok(Json(s.network.graph(false).await?))
+}
+
+async fn member_graph(
+    State(s): State<AppState>,
+    who: MaybePrincipal,
+    Path(did): Path<String>,
+) -> ApiResult<Json<Graph>> {
+    require_directory(&s, &who)?;
+    Ok(Json(s.network.member_graph(&did).await?))
 }
 
 async fn credential(

@@ -125,7 +125,7 @@ impl Network {
     }
 
     /// A member network's signed index, verified as its own.
-    async fn member_index(&self, did: &str, url: &str) -> Result<NetworkIndex, String> {
+    pub(crate) async fn member_index(&self, did: &str, url: &str) -> Result<NetworkIndex, String> {
         let now = Utc::now();
         if let Some((at, index)) = self.index_cache.lock().await.get(did)
             && now - *at < INDEX_CACHE_TTL
@@ -150,5 +150,28 @@ impl Network {
             .await
             .insert(did.to_string(), (now, index.clone()));
         Ok(index)
+    }
+}
+
+impl Network {
+    /// A member network's graph, from its verified signed index, for expanding it in a graph
+    /// view. Only acknowledged member networks with a known URL are expanded.
+    pub async fn member_graph(&self, did: &str) -> ApiResult<vtn_core::graph::Graph> {
+        let entry = self.entry(did).await?;
+        let url = entry
+            .profile
+            .url
+            .clone()
+            .filter(|_| entry.kind == EntryKind::Network && entry.state.is_membership())
+            .ok_or_else(|| {
+                crate::error::ApiError::NotFound(format!(
+                    "{did} is not a member network with a known URL"
+                ))
+            })?;
+        let index = self
+            .member_index(did, &url)
+            .await
+            .map_err(crate::error::ApiError::Upstream)?;
+        Ok(vtn_core::graph::from_index(&index))
     }
 }

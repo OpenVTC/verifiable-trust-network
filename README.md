@@ -33,11 +33,11 @@ Phase 1 of the delivery plan, implemented:
 - **Admin access.** Administrators are DIDs. They sign in by challenge-response from the `nnm`.
 - **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), using its own identity, and can later leave or repudiate.
 - **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
+- **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
 - **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. Members sign in as their VTC or VTN DID, or as a person presenting a membership credential from a member community.
 
 Not yet built (see the design's delivery plan):
 - the VTC-side network-membership module (acknowledge, register groups, relay to members)
-- the graph UI
 - network data rooms
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
@@ -106,6 +106,7 @@ nnm audit
 | GET | `/v1/directory/summary` | Member counts (public unless `show_counts = false`) |
 | GET | `/v1/index` | Signed index of published entries, each with `kind` and `acknowledged` |
 | GET | `/v1/graph` | DTG graph: nodes, and one edge per credential with its status |
+| GET | `/v1/graph/member/{did}` | A member network's graph, from its verified signed index |
 | GET | `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
 | GET | `/v1/credentials/{id}` | A credential the network issued or holds |
 | GET | `/v1/entries/{did}` | One published entry |
