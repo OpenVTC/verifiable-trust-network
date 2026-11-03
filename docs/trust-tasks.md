@@ -45,7 +45,7 @@ Every operation is a Trust Task, but no Trust Task document is ever the evidence
 | a person's membership | the person's VMC from a member community | community → person |
 | room pass | a short-lived credential | network → person |
 
-A Trust Task carries these credentials and asks for them to be issued. Its signature authenticates the request, and only the request. `servesRole/1` is retired: the member's signed `vtn/groups/register` request replaces it, and the `groupRegistered/1` acceptance binds that request by digest. Room-pass chains carry `ChainLink { registration, acceptance }`. A verifier checks each acceptance's signature, its digest and its status. A status that is revoked, suspended or cannot be determined fails the check (VTI-REG-012).
+A Trust Task carries these credentials and asks for them to be issued. Its signature authenticates the request, and only the request. `servesRole/1` is retired: the member's signed `vtn/groups/register` request replaces it, and the `groupRegistered/1` acceptance binds that request by digest. The digest is SHA-256 over the JCS form of the request **including** its proof (the step digest, not the task digest), so a re-signed copy is a different registration. A registered endpoint is `https://`. Room-pass chains carry `ChainLink { registration, acceptance }`. A verifier checks each acceptance's signature, its digest and its status. A status that is revoked, suspended or cannot be determined fails the check (VTI-REG-012).
 
 ## Lifetimes
 
