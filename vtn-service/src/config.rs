@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use vti_secrets::SecretsConfig;
-use vtn_core::groups::RoleDef;
-use vtn_core::model::{Framework, Visibility};
-use vtn_core::relay::DEFAULT_MAX_HOPS;
+use vti_vtn::groups::RoleDef;
+use vti_vtn::model::{Framework, Visibility};
+use vti_vtn::relay::DEFAULT_MAX_HOPS;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +32,11 @@ pub struct Config {
     /// A DID resolver sidecar. Unset: resolve directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver_url: Option<String>,
+    /// PEM files of certificate authorities to trust, beside the system's, when this
+    /// network calls another party over HTTPS: a private CA in a closed deployment.
+    /// Endpoints are always `https://` (`vtn/groups/register`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_root_certificates: Vec<PathBuf>,
     pub network: NetworkConfig,
     #[serde(default)]
     pub membership: MembershipConfig,
@@ -211,7 +216,7 @@ impl Config {
         }
         let mut seen = std::collections::HashSet::new();
         for role in &self.roles {
-            if !vtn_core::groups::valid_role_name(&role.name) {
+            if !vti_vtn::groups::valid_role_name(&role.name) {
                 errors.push(format!(
                     "roles: {:?} must be lowercase letters, digits, '-' or '_'",
                     role.name
@@ -222,7 +227,7 @@ impl Config {
             }
         }
         for room in &self.rooms {
-            if !vtn_core::groups::valid_role_name(&room.id) {
+            if !vti_vtn::groups::valid_role_name(&room.id) {
                 errors.push(format!(
                     "rooms: id {:?} must be lowercase letters, digits, '-' or '_'",
                     room.id

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use vtn_core::identity::Identity;
+use vti_vtn::identity::Identity;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Profile {

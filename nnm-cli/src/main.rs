@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use crate::profile::{AdminKey, NetworkRef, Profile};
-use vtn_client::{VtnClient, encode_did, encode_query};
+use vti_vtn::{VtnClient, encode_did, encode_query};
 
 #[derive(Parser)]
 #[command(
@@ -273,7 +273,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
         Command::Login { link, membership } => {
-            let link = vtn_client::SignInLink::parse(&link)?;
+            let link = vti_vtn::SignInLink::parse(&link)?;
             let membership = match membership {
                 Some(p) => Some(serde_json::from_str(&std::fs::read_to_string(&p)?)?),
                 None => None,

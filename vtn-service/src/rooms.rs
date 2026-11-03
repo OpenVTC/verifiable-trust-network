@@ -1,4 +1,4 @@
-//! Network rooms and their passes (see `vtn_core::rooms`).
+//! Network rooms and their passes (see `vti_vtn::rooms`).
 //!
 //! **Assumption A17:** the network issues room passes. Hosting the room is a room host's job
 //! (`vti-rooms` / `room-host`, with the room owned by the network's DID), and that host
@@ -9,10 +9,10 @@
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vtn_client::CredentialState;
-use vtn_core::VtnError;
-use vtn_core::groups::network_group_id;
-use vtn_core::rooms::{self, ChainLink, MAX_CHAIN};
+use vti_vtn::CredentialState;
+use vti_vtn::VtnError;
+use vti_vtn::groups::network_group_id;
+use vti_vtn::rooms::{self, ChainLink, MAX_CHAIN};
 
 use crate::error::{ApiError, ApiResult};
 use crate::network::Network;

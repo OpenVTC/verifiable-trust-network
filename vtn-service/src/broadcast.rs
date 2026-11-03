@@ -26,11 +26,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::task::JoinSet;
-use vtn_client::VtnClient;
-use vtn_core::VtnError;
-use vtn_core::groups::network_group_id;
-use vtn_core::identity::Identity;
-use vtn_core::relay::{self, DeliveryStatus, Envelope, Outgoing, Receipt};
+use vti_vtn::VtnClient;
+use vti_vtn::VtnError;
+use vti_vtn::groups::network_group_id;
+use vti_vtn::identity::Identity;
+use vti_vtn::relay::{self, DeliveryStatus, Envelope, Outgoing, Receipt};
 
 use crate::error::{ApiError, ApiResult};
 use crate::network::Network;

@@ -12,8 +12,6 @@ credential.
 
 | Crate | What |
 |---|---|
-| `vtn-core` | Domain model, entry lifecycle, DTG credential builders and verification, status lists, network index, graph export. Holds no I/O. |
-| `vtn-client` | Client side of the VTN API: DID sign-in bound to the expected network, and status-list checking. Used by `nnm`, and by the service when it deals with other networks. |
 | `vtn-service` | The `vtn` binary. It holds the network's VTA-provisioned identity (`vtn setup`), a fjall-backed store (via `vti-common`), the HTTP API, and admin sign-in by DID. |
 | `nnm-cli` | The `nnm` binary, the **Network Network Manager**. It is the operator CLI for VTNs, as `pnm` is for a person and `cnm` for a community. It holds the operator's admin key, signs in to networks, and runs curation commands. |
 
@@ -144,7 +142,7 @@ Index, graph, entries, credentials and directory follow `[directory] visibility`
 | POST | `/v1/admin/memberships/{parent}/{leave\|groups}` | Leave, or serve another of the parent's roles |
 | POST | `/v1/admin/memberships/repudiate` | `{ url }` repudiates a parent's listing |
 
-A listed party signs with `vtn_core::credentials::member::{acknowledge, repudiate}`.
+A listed party signs with `vti_vtn::credentials::member::{acknowledge, repudiate}`.
 
 ## Repository
 
