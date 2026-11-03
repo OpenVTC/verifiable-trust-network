@@ -9,6 +9,7 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 
 ### Features
 
+- **core**: listings and repudiations use the registered DTG predicates `https://registry.trustoverip.org/dtg/vsc/lists/1` and `…/repudiates/1` (dtgwg-vsc-registry #33). A listing's `object.value` is `{ nodeType: "VTC" | "VTN", framework }`, replacing `kind`. A joining network checks that its parent lists it with `nodeType: VTN`. Listings issued under the interim `openvtc.org` IRI must be re-issued.
 - **core**: VTN domain model: entries (community or network), the entry lifecycle (listed → acknowledged → suspended / repudiated / removed / departed), and DTG credential builders. A listing is a VSC under `lists/1` (A1). The membership offer is unsigned, and the VMC grant is signed only after the party's acknowledgement (A2). Repudiation and departure are VSCs under `repudiates/1`.
 - **core**: W3C Bitstring Status Lists for revocation and suspension, the signed network index (VTI-VTN-011/024/031), and the DTG graph export with one edge per credential.
 - **core**: pluggable, purpose-checked key resolution. Credentials verify under `assertionMethod` and admin sign-in under `authentication` (VTI-KEY-022).

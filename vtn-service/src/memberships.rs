@@ -19,6 +19,7 @@ use vtn_client::{VtnClient, encode_did};
 use vtn_core::VtnError;
 use vtn_core::credentials::member;
 use vtn_core::groups::{self, network_group_id};
+use vtn_core::model::EntryKind;
 use vtn_core::verify::verify_signed_by;
 use vtn_core::vocab::LISTS_V1;
 
@@ -129,6 +130,13 @@ impl Network {
         let vsc = verify_signed_by(&listing, parent, self.resolver.as_ref(), Utc::now()).await?;
         if vsc.subject() != self.did() || vsc.predicate() != Some(LISTS_V1) {
             return Err(rejected("the parent's listing does not list this network"));
+        }
+        if listing["credentialSubject"]["object"]["value"]["nodeType"].as_str()
+            != Some(EntryKind::Network.node_type())
+        {
+            return Err(rejected(
+                "the parent's listing does not list this party as a network",
+            ));
         }
         Ok(listing)
     }
