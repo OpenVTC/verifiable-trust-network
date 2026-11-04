@@ -62,7 +62,7 @@ Credentials that evidence relationships (the table above) are revocable through 
 
 ## Shared shapes: `vtn/_shared/0.1/`
 
-The shapes are those of `vtn-core` today, in camelCase. `Entry.createdAt` and `Entry.updatedAt` change from today's snake_case.
+The shapes are those of `vti-vtn` today, in camelCase. `Entry.createdAt` and `Entry.updatedAt` change from today's snake_case.
 
 | File | Defs |
 |---|---|

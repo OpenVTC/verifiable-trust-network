@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["vtn-core", "vtn-client", "vtn-service", "nnm-cli"]
+members = ["vtn-service", "nnm-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,8 +22,9 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 
 [workspace.dependencies]
-vtn-core = { path = "vtn-core" }
-vtn-client = { path = "vtn-client" }
+# The VTN protocol, shared with the VTC: model, credentials, verification, groups, relay,
+# rooms, and (feature `client`) the `vtn/*` Trust Task client.
+vti-vtn = { version = "0.2", features = ["client"] }
 
 dtg-credentials = "0.13"
 affinidi-secrets-resolver = "0.5.15"

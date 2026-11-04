@@ -6,8 +6,8 @@ networks, every relationship a DTG credential. Spec: `dtgwg-vti-spec/spec/11a-vt
 
 ## Crates
 
-- `vtn-core`: pure domain logic with no I/O. Covers the model, lifecycle, credentials, verification (`KeyResolver`), status lists, index, graph, directory, groups and relay envelopes.
-- `vtn-client`: HTTP client (sign-in bound to the expected network DID) and status-list checker.
+The protocol lives in VTI's `vti-vtn` crate (verifiable-trust-infrastructure), shared with the VTC: the model, lifecycle, credentials, verification (`KeyResolver`), status lists, index, graph, directory, groups, relay envelopes and room passes, and (feature `client`) the `vtn/*` Trust Task client and status-list checker. Protocol changes go there first.
+
 - `vtn-service`: the `vtn` binary. Holds the store (`vti-common`), routes, admin and member auth, VTA provisioning (`vtn setup`, `templates/vtn-host.json`), the landing page (`vtn-service/web/`), group registration (`groups.rs`), nested membership (`memberships.rs`), and broadcast and relay (`broadcast.rs`).
 - `nnm-cli`: the `nnm` binary, the Network Network Manager. It is the operator CLI, a sibling of PNM and CNM.
 

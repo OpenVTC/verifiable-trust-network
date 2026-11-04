@@ -23,14 +23,14 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use vtn_core::directory::{DirectoryEntry, DirectoryQuery};
-use vtn_core::graph::Graph;
-use vtn_core::index::IndexEntry;
-use vtn_core::model::{Entry, EntryKind, EntryProfile, EntryState, Visibility};
-use vtn_core::status::Purpose;
+use vti_vtn::directory::{DirectoryEntry, DirectoryQuery};
+use vti_vtn::graph::Graph;
+use vti_vtn::index::IndexEntry;
+use vti_vtn::model::{Entry, EntryKind, EntryProfile, EntryState, Visibility};
+use vti_vtn::status::Purpose;
 
-use vtn_core::groups::{RegisteredGroup, RoleDef};
-use vtn_core::relay::{Envelope, Outgoing};
+use vti_vtn::groups::{RegisteredGroup, RoleDef};
+use vti_vtn::relay::{Envelope, Outgoing};
 
 use crate::auth::{Auth, Challenge, Principal, Role, SessionGrant};
 use crate::broadcast::{BroadcastRecord, RelayResponse};

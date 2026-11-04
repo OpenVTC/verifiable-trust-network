@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use vti_common::config::StoreConfig;
 use vti_common::error::AppError;
 use vti_common::store::{KeyspaceHandle, Store};
-use vtn_core::groups::RegisteredGroup;
-use vtn_core::lifecycle::Event;
-use vtn_core::model::{Entry, EntryState, StatusIndex};
-use vtn_core::status::{Bitstring, LIST_BITS, Purpose};
+use vti_vtn::groups::RegisteredGroup;
+use vti_vtn::lifecycle::Event;
+use vti_vtn::model::{Entry, EntryState, StatusIndex};
+use vti_vtn::status::{Bitstring, LIST_BITS, Purpose};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AuditEvent {

@@ -18,10 +18,10 @@ use std::collections::HashSet;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vtn_core::directory::{self, DirectoryQuery, FederatedEntry, PathHop, Unreachable};
-use vtn_core::index::NetworkIndex;
-use vtn_core::model::EntryKind;
-use vtn_core::verify::{ASSERTION_METHOD, verify_document};
+use vti_vtn::directory::{self, DirectoryQuery, FederatedEntry, PathHop, Unreachable};
+use vti_vtn::index::NetworkIndex;
+use vti_vtn::model::EntryKind;
+use vti_vtn::verify::{ASSERTION_METHOD, verify_document};
 
 use crate::error::ApiResult;
 use crate::network::Network;
@@ -156,7 +156,7 @@ impl Network {
 impl Network {
     /// A member network's graph, from its verified signed index, for expanding it in a graph
     /// view. Only acknowledged member networks with a known URL are expanded.
-    pub async fn member_graph(&self, did: &str) -> ApiResult<vtn_core::graph::Graph> {
+    pub async fn member_graph(&self, did: &str) -> ApiResult<vti_vtn::graph::Graph> {
         let entry = self.entry(did).await?;
         let url = entry
             .profile
@@ -172,6 +172,6 @@ impl Network {
             .member_index(did, &url)
             .await
             .map_err(crate::error::ApiError::Upstream)?;
-        Ok(vtn_core::graph::from_index(&index))
+        Ok(vti_vtn::graph::from_index(&index))
     }
 }

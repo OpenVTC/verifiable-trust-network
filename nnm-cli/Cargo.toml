@@ -15,8 +15,7 @@ name = "nnm"
 path = "src/main.rs"
 
 [dependencies]
-vtn-core = { workspace = true }
-vtn-client = { workspace = true }
+vti-vtn = { workspace = true }
 affinidi-secrets-resolver = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

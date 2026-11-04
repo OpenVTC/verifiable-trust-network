@@ -22,9 +22,9 @@ pub mod store;
 use std::sync::Arc;
 
 use anyhow::Context;
-use vtn_core::identity::Identity;
-use vtn_core::model::NetworkProfile;
-use vtn_core::verify::KeyResolver;
+use vti_vtn::identity::Identity;
+use vti_vtn::model::NetworkProfile;
+use vti_vtn::verify::KeyResolver;
 
 use crate::auth::Auth;
 use crate::config::Config;
@@ -93,6 +93,14 @@ pub async fn build_state_with(
         config.admins.clone(),
         resolver.clone(),
     );
+    let mut extra_roots = Vec::new();
+    for path in &config.extra_root_certificates {
+        let pem = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        extra_roots.extend(
+            reqwest::Certificate::from_pem_bundle(&pem)
+                .with_context(|| format!("{} is not a PEM certificate bundle", path.display()))?,
+        );
+    }
     let network = Network::new(
         profile,
         identity,
@@ -106,6 +114,7 @@ pub async fn build_state_with(
             directory: config.directory.clone(),
             rooms: config.rooms.clone(),
             status_cache: chrono::Duration::seconds(config.status_cache_seconds.max(0)),
+            extra_roots,
         },
     );
     Ok(AppState {

@@ -15,13 +15,13 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use vtn_client::{VtnClient, encode_did};
-use vtn_core::VtnError;
-use vtn_core::credentials::member;
-use vtn_core::groups::{self, network_group_id};
-use vtn_core::model::EntryKind;
-use vtn_core::verify::verify_signed_by;
-use vtn_core::vocab::LISTS_V1;
+use vti_vtn::VtnError;
+use vti_vtn::credentials::member;
+use vti_vtn::groups::{self, network_group_id};
+use vti_vtn::model::EntryKind;
+use vti_vtn::verify::verify_signed_by;
+use vti_vtn::vocab::LISTS_V1;
+use vti_vtn::{VtnClient, encode_did};
 
 use crate::error::{ApiError, ApiResult};
 use crate::network::Network;
@@ -78,7 +78,7 @@ fn rejected(why: impl Into<String>) -> ApiError {
     ApiError::Vtn(VtnError::Rejected(why.into()))
 }
 
-fn peer(e: vtn_client::ClientError) -> ApiError {
+fn peer(e: vti_vtn::ClientError) -> ApiError {
     ApiError::Upstream(e.to_string())
 }
 
@@ -162,10 +162,8 @@ impl Network {
             &mapping.parent_role,
             &group,
             &endpoint,
-            signing_time(),
         )
         .await?;
-        let registration = serde_json::to_value(&registration).map_err(VtnError::from)?;
         let accepted = client
             .post(
                 &format!("/v1/entries/{}/groups", encode_did(self.did())),

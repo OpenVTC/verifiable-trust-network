@@ -323,12 +323,12 @@ vtn/recognition/{issue,revoke,list}
 vtn/rooms/*                                       (reuse community-rooms shapes)
 ```
 
-Generated into `vti-specs-vtn`, consumed by `vtn-service` and `vtn-client`. CLI
+Generated into `vti-specs-vtn`, consumed by `vtn-service` and `vti-vtn`'s client. CLI
 support goes in `cnm-cli`.
 
 ## 11. Delivery plan
 
-**Progress (2026-11-02):** Phases 1–4 are implemented for the network side, in `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli`:
+**Progress (2026-11-02):** Phases 1–4 are implemented for the network side, in `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli` (`vtn-core` and `vtn-client` have since moved into VTI as `vti-vtn`):
 - VTA-provisioned identity, and admin, member and wallet sign-in by DID.
 - Listing and membership lifecycle with status lists.
 - Directory with visibility, federated search, and the trust graph view.

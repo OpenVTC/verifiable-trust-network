@@ -286,6 +286,7 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
         admins: inputs.admins.clone(),
         resolver_url: inputs.resolver_url.clone(),
         status_cache_seconds: 300,
+        extra_root_certificates: vec![],
         network: inputs.network.clone(),
         membership: inputs.membership.clone(),
         directory: inputs.directory.clone(),

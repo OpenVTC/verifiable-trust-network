@@ -17,16 +17,24 @@ use axum::{Json, Router};
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use vtn_client::{VtnClient, encode_did};
-use vtn_core::credentials::member;
-use vtn_core::groups;
-use vtn_core::identity::Identity;
-use vtn_core::model::{Framework, Visibility};
-use vtn_core::relay::{self, Envelope};
-use vtn_core::status::{Bitstring, Purpose, credential_status, status_list_credential};
-use vtn_core::verify::LocalDidKeyResolver;
+use vti_vtn::credentials::member;
+use vti_vtn::groups;
+use vti_vtn::identity::Identity;
+use vti_vtn::model::{Framework, Visibility};
+use vti_vtn::relay::{self, Envelope};
+use vti_vtn::status::{Bitstring, Purpose, credential_status, status_list_credential};
+use vti_vtn::verify::LocalDidKeyResolver;
+use vti_vtn::{VtnClient, encode_did};
 use vtn_service::config::{Config, DirectoryConfig, MembershipConfig, NetworkConfig};
 use vtn_service::identity::VtaKeyResolver;
+
+mod support;
+use support::tls;
+
+/// A client for a test server, trusting the test authority.
+fn https(url: &str) -> VtnClient {
+    VtnClient::with_http(tls::client(), url)
+}
 
 struct Live {
     _dir: tempfile::TempDir,
@@ -36,10 +44,7 @@ struct Live {
 }
 
 async fn serve(app: Router) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    url
+    tls::serve(app).await
 }
 
 async fn live(name: &str, required_admins: bool, visibility: Visibility) -> Live {
@@ -52,9 +57,10 @@ async fn live_with(
     visibility: Visibility,
     rooms: Vec<vtn_service::rooms::RoomDef>,
 ) -> Live {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, url) = tls::bind().await;
     let dir = tempfile::tempdir().unwrap();
+    let ca = dir.path().join("test-ca.pem");
+    std::fs::write(&ca, &tls::ca().ca_pem).unwrap();
     let operator = Identity::generate();
     let config = Config {
         listen: url.clone(),
@@ -62,6 +68,7 @@ async fn live_with(
         data_dir: dir.path().to_path_buf(),
         admins: vec![operator.did().to_string()],
         resolver_url: None,
+        extra_root_certificates: vec![ca],
         status_cache_seconds: 0,
         network: NetworkConfig {
             name: name.into(),
@@ -77,7 +84,7 @@ async fn live_with(
             visibility,
             ..Default::default()
         },
-        roles: vec![vtn_core::groups::RoleDef {
+        roles: vec![vti_vtn::groups::RoleDef {
             name: "admins".into(),
             description: Some("Each member's administrators".into()),
             required: required_admins,
@@ -94,7 +101,7 @@ async fn live_with(
     let did = state.network.did().to_string();
     let app = vtn_service::routes::router(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut admin = VtnClient::new(&url);
+    let mut admin = https(&url);
     admin.sign_in(&operator, &did, None).await.unwrap();
     Live {
         _dir: dir,
@@ -146,7 +153,7 @@ async fn community_joins(net: &Live, community: &Identity, label: &str, inbox: &
         )
         .await
         .unwrap();
-    let client = VtnClient::new(&net.url);
+    let client = https(&net.url);
     let at = Utc::now() - Duration::seconds(5);
 
     // Acknowledging before registering the required role is refused.
@@ -173,7 +180,7 @@ async fn community_joins(net: &Live, community: &Identity, label: &str, inbox: &
     );
 
     let group = format!("{}:groups:admins", community.did());
-    let registration = groups::register(community, &net.did, "admins", &group, inbox, at)
+    let registration = groups::register(community, &net.did, "admins", &group, inbox)
         .await
         .unwrap();
     client
@@ -248,7 +255,7 @@ async fn broadcast_cascades_through_nested_networks() {
         )
         .await
         .unwrap();
-    let mut stv_client = VtnClient::new(&au.url);
+    let mut stv_client = https(&au.url);
     stv_client.sign_in(&stv, &au.did, None).await.unwrap();
     let at = Utc::now() - Duration::seconds(5);
     let registration = groups::register(
@@ -257,7 +264,6 @@ async fn broadcast_cascades_through_nested_networks() {
         "admins",
         &format!("{}:groups:admins", stv.did()),
         &format!("{inbox_url}/inbox/stv"),
-        at,
     )
     .await
     .unwrap();
@@ -353,7 +359,7 @@ async fn broadcast_cascades_through_nested_networks() {
     let hop = relay::new_hop(&rogue, &id, &format!("{}#role-admins", au.did), "admins", 0)
         .await
         .unwrap();
-    let refused = VtnClient::new(&au.url)
+    let refused = https(&au.url)
         .post(
             "/v1/relay/admins",
             &json!({ "envelope": { "message": message, "hops": [hop] } }),
@@ -443,7 +449,7 @@ async fn a_network_can_repudiate_a_parent_listing() {
     assert_eq!(m["state"], "repudiated");
     let (_, entry) = (
         (),
-        VtnClient::new(&whn.url)
+        https(&whn.url)
             .get(&format!("/v1/entries/{}", encode_did(&nz.did)))
             .await
             .unwrap(),
@@ -466,8 +472,7 @@ async fn a_network_can_repudiate_a_parent_listing() {
 
 /// A community serving its own status list, to check a person's credential against.
 async fn status_server(community: &Identity, revoked: &[u32]) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, url) = tls::bind().await;
     let mut bits = Bitstring::default();
     for i in revoked {
         bits.set(*i, true).unwrap();
@@ -508,7 +513,7 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
         )
         .await
         .unwrap();
-    let mut client = VtnClient::new(&whn.url);
+    let mut client = https(&whn.url);
     client.sign_in(&msf, &whn.did, None).await.unwrap();
     let offer = client
         .get(&format!("/v1/entries/{}/offer", encode_did(msf.did())))
@@ -549,7 +554,7 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
         let url = whn.url.clone();
         let did = whn.did.clone();
         async move {
-            VtnClient::new(&url)
+            https(&url)
                 .sign_in(&person, &did, Some(vmc))
                 .await
                 .map_err(|e| e.status())
@@ -629,7 +634,7 @@ async fn federated_search_follows_member_networks_with_paths() {
         .await
         .unwrap();
 
-    let found = VtnClient::new(&whn.url)
+    let found = https(&whn.url)
         .get("/v1/directory/federated?q=vincent")
         .await
         .unwrap();
@@ -655,7 +660,7 @@ async fn federated_search_follows_member_networks_with_paths() {
     );
 
     // The graph view expands a member network from its verified index.
-    let au_graph = VtnClient::new(&whn.url)
+    let au_graph = https(&whn.url)
         .get(&format!("/v1/graph/member/{}", encode_did(&au.did)))
         .await
         .unwrap();
@@ -668,14 +673,14 @@ async fn federated_search_follows_member_networks_with_paths() {
             .any(|n| n["id"] == nsw.did)
     );
     // Not for a network that never acknowledged.
-    let err = VtnClient::new(&whn.url)
+    let err = https(&whn.url)
         .get(&format!("/v1/graph/member/{}", encode_did(&pending.did)))
         .await
         .unwrap_err();
     assert_eq!(err.status(), Some(404));
 
     // Plain (non-federated) search sees only WHN's own entries.
-    let own = VtnClient::new(&whn.url)
+    let own = https(&whn.url)
         .get("/v1/directory?q=vincent")
         .await
         .unwrap();
@@ -690,7 +695,7 @@ async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
     community_joins_open(&whn, &msf).await;
 
     // The page starts a login; nobody has signed yet.
-    let page = VtnClient::new(&whn.url);
+    let page = https(&whn.url);
     let start = page.post("/v1/auth/login", &json!({})).await.unwrap();
     let (login, secret) = (
         start["login"].as_str().unwrap(),
@@ -704,7 +709,7 @@ async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
     );
 
     // A link whose endpoint answers as another network is refused before anything is signed.
-    let mismatched = vtn_client::SignInLink {
+    let mismatched = vti_vtn::SignInLink {
         network: whn.did.clone(),
         endpoint: other.url.clone(),
         challenge: start["challenge"].as_str().unwrap().into(),
@@ -712,8 +717,8 @@ async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
     assert!(mismatched.complete(&msf, None).await.is_err());
 
     // The wallet (here, the member community itself) signs the link.
-    let link = vtn_client::SignInLink::parse(
-        &vtn_client::SignInLink {
+    let link = vti_vtn::SignInLink::parse(
+        &vti_vtn::SignInLink {
             network: start["audience"].as_str().unwrap().into(),
             endpoint: whn.url.clone(),
             challenge: start["challenge"].as_str().unwrap().into(),
@@ -721,7 +726,28 @@ async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
         .to_uri(),
     )
     .unwrap();
-    let grant = link.complete(&msf, None).await.unwrap();
+    // What `SignInLink::complete` does, over a client that trusts the test authority.
+    let wallet = https(&link.endpoint);
+    assert_eq!(wallet.network_did().await.unwrap(), link.network);
+    let authentication = msf
+        .sign_document_for(
+            json!({
+                "type": "VtnAdminAuthentication",
+                "did": msf.did(),
+                "challenge": link.challenge,
+                "audience": link.network,
+            }),
+            vti_vtn::verify::AUTHENTICATION,
+        )
+        .await
+        .unwrap();
+    let grant = wallet
+        .post(
+            "/v1/auth/session",
+            &json!({ "authentication": authentication }),
+        )
+        .await
+        .unwrap();
     assert_eq!(grant["role"], "memberEntity");
 
     // The page collects the session once, and it opens the members-only directory.
@@ -733,7 +759,7 @@ async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
         "handed over once"
     );
     let token = done["session"]["token"].as_str().unwrap();
-    let res = reqwest::Client::new()
+    let res = tls::client()
         .get(format!("{}/v1/directory", whn.url))
         .bearer_auth(token)
         .send()
@@ -754,7 +780,7 @@ async fn community_joins_open(net: &Live, community: &Identity) {
         )
         .await
         .unwrap();
-    let mut client = VtnClient::new(&net.url);
+    let mut client = https(&net.url);
     client.sign_in(community, &net.did, None).await.unwrap();
     let offer = client
         .get(&format!(
@@ -819,11 +845,10 @@ async fn join_with_group(net: &Live, community: &Identity, endpoint: &str) {
         "admins",
         &format!("{}:groups:admins", community.did()),
         endpoint,
-        Utc::now() - Duration::seconds(5),
     )
     .await
     .unwrap();
-    VtnClient::new(&net.url)
+    https(&net.url)
         .post(
             &format!("/v1/entries/{}/groups", encode_did(community.did())),
             &json!({ "registration": registration }),
@@ -842,7 +867,7 @@ async fn failed_deliveries_are_queued_and_retried() {
     let dead = Identity::generate();
     join_with_group(&whn, &flaky, &flaky_url).await;
     join_with_group(&whn, &refusing, &refusing_url).await;
-    join_with_group(&whn, &dead, "http://127.0.0.1:9/").await;
+    join_with_group(&whn, &dead, "https://127.0.0.1:9/").await;
 
     let record = whn
         .admin
@@ -885,7 +910,7 @@ async fn failed_deliveries_are_queued_and_retried() {
         .admin
         .get(&format!(
             "/v1/admin/broadcasts/{}",
-            vtn_client::encode_query(id)
+            vti_vtn::encode_query(id)
         ))
         .await
         .unwrap();
@@ -910,12 +935,11 @@ async fn join_registering(net: &Live, community: &Identity, group: &Identity) ->
         &net.did,
         "admins",
         group.did(),
-        "http://127.0.0.1:9/",
-        Utc::now() - Duration::seconds(5),
+        "https://127.0.0.1:9/",
     )
     .await
     .unwrap();
-    let registered = VtnClient::new(&net.url)
+    let registered = https(&net.url)
         .post(
             &format!("/v1/entries/{}/groups", encode_did(community.did())),
             &json!({ "registration": registration }),
@@ -952,7 +976,7 @@ async fn ask_pass(
     membership: Value,
     chain: Vec<Value>,
 ) -> Result<Value, Option<u16>> {
-    let client = VtnClient::new(&net.url);
+    let client = https(&net.url);
     let challenge = client
         .post("/v1/auth/challenge", &json!({ "did": person.did() }))
         .await
@@ -965,7 +989,7 @@ async fn ask_pass(
                 "challenge": challenge["challenge"],
                 "audience": net.did,
             }),
-            vtn_core::verify::AUTHENTICATION,
+            vti_vtn::verify::AUTHENTICATION,
         )
         .await
         .unwrap();
@@ -1013,7 +1037,7 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
     let person = Identity::generate();
     let vmc = group_vmc(&stv_admins, &person).await;
 
-    let rooms = VtnClient::new(&whn.url).get("/v1/rooms").await.unwrap();
+    let rooms = https(&whn.url).get("/v1/rooms").await.unwrap();
     assert_eq!(rooms[0]["id"], "pandemic");
 
     // Through Health-AU: one link.
@@ -1032,7 +1056,7 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
         vac["credentialSubject"]["authority"]["scope"],
         format!("{}#room-pandemic", whn.did)
     );
-    vtn_core::verify::verify_signed_by(vac, &whn.did, &LocalDidKeyResolver, Utc::now())
+    vti_vtn::verify::verify_signed_by(vac, &whn.did, &LocalDidKeyResolver, Utc::now())
         .await
         .unwrap();
 
@@ -1079,7 +1103,7 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
 
     // St Vincent's leaves Health-AU: its acceptance is revoked, and the chain no longer holds.
     let departure = member::repudiate(
-        &VtnClient::new(&au.url)
+        &https(&au.url)
             .get(&format!("/v1/entries/{}", encode_did(stv.did())))
             .await
             .unwrap()["grant"],
@@ -1088,7 +1112,7 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
     )
     .await
     .unwrap();
-    VtnClient::new(&au.url)
+    https(&au.url)
         .post(
             &format!("/v1/entries/{}/repudiate", encode_did(stv.did())),
             &json!({ "repudiation": departure }),

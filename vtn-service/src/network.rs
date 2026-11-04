@@ -10,23 +10,23 @@ use chrono::{DateTime, Duration, Utc};
 use dtg_credentials::{DTGCredential, DTGCredentialType};
 use serde_json::Value;
 use tokio::sync::Mutex;
-use vtn_core::VtnError;
-use vtn_core::credentials::{listing_vsc, membership_offer};
-use vtn_core::directory::{self, DirectoryEntry, DirectoryQuery, DirectorySummary};
-use vtn_core::graph::{self, EdgeStatus, Graph};
-use vtn_core::identity::Identity;
-use vtn_core::index::{self, NetworkIndex};
-use vtn_core::lifecycle::{Event, transition};
-use vtn_core::model::{
+use vti_vtn::VtnError;
+use vti_vtn::credentials::{listing_vsc, membership_offer};
+use vti_vtn::directory::{self, DirectoryEntry, DirectoryQuery, DirectorySummary};
+use vti_vtn::graph::{self, EdgeStatus, Graph};
+use vti_vtn::identity::Identity;
+use vti_vtn::index::{self, NetworkIndex};
+use vti_vtn::lifecycle::{Event, transition};
+use vti_vtn::model::{
     Entry, EntryKind, EntryProfile, EntryState, Issued, NetworkProfile, StateChange,
 };
-use vtn_core::status::{self, Purpose, credential_status};
-use vtn_core::verify::{
+use vti_vtn::status::{self, Purpose, credential_status};
+use vti_vtn::verify::{
     KeyResolver, Repudiated, verify_acknowledgement, verify_repudiation, verify_signed_by,
 };
 
-use vtn_client::{CredentialState, StatusChecker, VtnClient};
-use vtn_core::groups::RoleDef;
+use vti_vtn::groups::RoleDef;
+use vti_vtn::{CredentialState, StatusChecker, VtnClient};
 
 use crate::config::RelayConfig;
 use crate::error::{ApiError, ApiResult};
@@ -41,6 +41,10 @@ pub struct Settings {
     pub directory: crate::config::DirectoryConfig,
     pub rooms: Vec<crate::rooms::RoomDef>,
     pub status_cache: Duration,
+    /// Certificate authorities trusted beside the system's ([`Config::extra_root_certificates`]).
+    ///
+    /// [`Config::extra_root_certificates`]: crate::config::Config::extra_root_certificates
+    pub extra_roots: Vec<reqwest::Certificate>,
 }
 
 pub struct Network {
@@ -54,7 +58,7 @@ pub struct Network {
     pub(crate) settings: Settings,
     pub(crate) directory: crate::config::DirectoryConfig,
     pub(crate) index_cache:
-        Mutex<std::collections::HashMap<String, (DateTime<Utc>, vtn_core::index::NetworkIndex)>>,
+        Mutex<std::collections::HashMap<String, (DateTime<Utc>, vti_vtn::index::NetworkIndex)>>,
     pub(crate) write: Mutex<()>,
 }
 
@@ -67,8 +71,14 @@ impl Network {
         resolver: Arc<dyn KeyResolver>,
         settings: Settings,
     ) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
+        let http = settings
+            .extra_roots
+            .iter()
+            .cloned()
+            .fold(
+                reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)),
+                |builder, root| builder.add_root_certificate(root),
+            )
             .build()
             .expect("HTTP client");
         let status =

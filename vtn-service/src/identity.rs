@@ -17,9 +17,9 @@ use vta_sdk::did_secrets::{DidSecretsBundle, SecretEntry};
 use vta_sdk::sealed_transfer::DidKeyMaterialV2;
 use vta_sdk::trust_task_proof::{ProofPurpose, PurposeVmResolver, TrustTaskVmResolver};
 use vti_common::seed_store::SeedStore;
-use vtn_core::VtnError;
-use vtn_core::identity::Identity;
-use vtn_core::verify::{KeyFuture, KeyResolver};
+use vti_vtn::VtnError;
+use vti_vtn::identity::Identity;
+use vti_vtn::verify::{KeyFuture, KeyResolver};
 
 use crate::config::Config;
 

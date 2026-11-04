@@ -1,12 +1,12 @@
-//! Groups members register for the network's roles (see `vtn_core::groups`).
+//! Groups members register for the network's roles (see `vti_vtn::groups`).
 
 use chrono::Utc;
 use serde_json::Value;
-use vtn_core::VtnError;
-use vtn_core::groups::{self, RegisteredGroup};
-use vtn_core::lifecycle::Event;
-use vtn_core::model::{EntryState, Issued};
-use vtn_core::status::{Purpose, credential_status};
+use vti_vtn::VtnError;
+use vti_vtn::groups::{self, RegisteredGroup};
+use vti_vtn::lifecycle::Event;
+use vti_vtn::model::{EntryState, Issued};
+use vti_vtn::status::{Purpose, credential_status};
 
 use crate::error::{ApiError, ApiResult};
 use crate::network::Network;

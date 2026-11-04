@@ -27,7 +27,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
-use vtn_core::verify::{AUTHENTICATION, KeyResolver, verify_document};
+use vti_vtn::verify::{AUTHENTICATION, KeyResolver, verify_document};
 
 use crate::error::{ApiError, ApiResult};
 

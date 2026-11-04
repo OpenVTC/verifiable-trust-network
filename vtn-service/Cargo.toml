@@ -15,8 +15,7 @@ name = "vtn"
 path = "src/main.rs"
 
 [dependencies]
-vtn-core = { workspace = true }
-vtn-client = { workspace = true }
+vti-vtn = { workspace = true }
 reqwest = { workspace = true }
 vti-common = { workspace = true }
 vti-secrets = { workspace = true }
@@ -42,6 +41,10 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 affinidi-secrets-resolver = { workspace = true }
+# HTTPS for the in-process test networks and inboxes (tests/support/tls.rs).
+rcgen = "0.14"
+rustls = "0.23"
+tokio-rustls = "0.26"
 tempfile = { workspace = true }
 tower = { workspace = true }
 

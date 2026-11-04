@@ -10,11 +10,11 @@ use axum::http::{Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use tower::ServiceExt;
-use vtn_core::credentials::member;
-use vtn_core::identity::Identity;
-use vtn_core::model::Visibility;
-use vtn_core::status::Bitstring;
-use vtn_core::verify::AUTHENTICATION;
+use vti_vtn::credentials::member;
+use vti_vtn::identity::Identity;
+use vti_vtn::model::Visibility;
+use vti_vtn::status::Bitstring;
+use vti_vtn::verify::AUTHENTICATION;
 use vtn_service::auth::{Challenge, authentication_document};
 use vtn_service::config::{Config, DirectoryConfig, MembershipConfig, NetworkConfig};
 use vtn_service::identity::VtaKeyResolver;
@@ -37,12 +37,13 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         data_dir: dir.to_path_buf(),
         admins,
         resolver_url: None,
+        extra_root_certificates: vec![],
         status_cache_seconds: 0,
         network: NetworkConfig {
             name: name.into(),
             description: None,
             owner: format!("{name} owner"),
-            framework: vtn_core::model::Framework {
+            framework: vti_vtn::model::Framework {
                 iri: format!("https://{}.example/gf", name.to_lowercase()),
                 version: "1.0".into(),
             },

@@ -9,6 +9,9 @@ data_dir = "data/vtn"
 # How long a fetched status list (a community's or member network's) is trusted. A
 # revocation elsewhere can take this long to be seen here.
 status_cache_seconds = 300
+# Certificate authorities to trust beside the system's when calling other parties over
+# HTTPS (a private CA). Endpoints are always https://.
+# extra_root_certificates = ["/etc/vtn/private-ca.pem"]
 # Administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
 admins = ["did:key:z6Mk...replace-me"]
 
