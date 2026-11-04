@@ -3,8 +3,8 @@
 //! **Assumption A17:** the network issues room passes. Hosting the room is a room host's job
 //! (`vti-rooms` / `room-host`, with the room owned by the network's DID), and that host
 //! honours a pass as a VAC rooted at the network. The chain links a person presents are
-//! handed to them by their community. The person's sign-in challenge comes from
-//! `/v1/auth/challenge`.
+//! handed to them by their community. The person asks with `vtn/rooms/pass`, signed by
+//! themselves: the signer is the holder the pass names.
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -41,18 +41,6 @@ fn default_pass_minutes() -> i64 {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct PassRequest {
-    /// The holder's signed sign-in document (challenge from `/v1/auth/challenge`).
-    pub authentication: Value,
-    /// The holder's membership credential from their group.
-    pub membership: Value,
-    /// Links from that group up to a group registered here, nearest first.
-    #[serde(default)]
-    pub chain: Vec<ChainLink>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct RoomPass {
     pub room: RoomDef,
     pub pass: Value,
@@ -60,8 +48,14 @@ pub struct RoomPass {
     pub via: Vec<String>,
 }
 
-fn refuse(why: impl Into<String>) -> ApiError {
-    ApiError::Vtn(VtnError::Rejected(why.into()))
+/// The holder or their membership does not qualify.
+fn not_eligible(why: impl Into<String>) -> ApiError {
+    ApiError::coded("notEligible", why)
+}
+
+/// The chain of group evidence does not hold.
+fn chain_invalid(why: impl Into<String>) -> ApiError {
+    ApiError::coded("chainInvalid", why)
 }
 
 impl Network {
@@ -69,41 +63,43 @@ impl Network {
         &self.settings.rooms
     }
 
-    async fn status_ok(&self, credential: &Value, what: &str) -> ApiResult<()> {
+    /// A credential's status is valid. Revoked, suspended or indeterminate fails
+    /// (VTI-REG-012).
+    async fn status_ok(&self, credential: &Value, what: &str) -> Result<(), String> {
         match self.status.check(credential).await {
             Ok(CredentialState::Valid) => Ok(()),
-            Ok(state) => Err(refuse(format!("{what} is {state:?}"))),
-            Err(e) => Err(refuse(format!("{what}'s status is indeterminate: {e}"))),
+            Ok(state) => Err(format!("{what} is {state:?}")),
+            Err(e) => Err(format!("{what}'s status is indeterminate: {e}")),
         }
     }
 
-    /// Issue a pass for `room` to the signed-in holder, on the evidence in `request`.
-    /// `holder` is the DID the request's authentication proved.
+    /// Issue a pass for `room_id` to `holder`, the request's signer, on the evidence they
+    /// present: `membership` (their group's VMC naming them) and `chain`, the links from that
+    /// group up to a group registered here, nearest first.
     pub async fn room_pass(
         &self,
         room_id: &str,
         holder: &str,
-        request: &PassRequest,
+        membership: &Value,
+        chain: &[ChainLink],
     ) -> ApiResult<RoomPass> {
         let room = self
             .rooms()
             .iter()
             .find(|r| r.id == room_id)
             .cloned()
-            .ok_or_else(|| ApiError::NotFound(format!("no room {room_id}")))?;
+            .ok_or_else(|| ApiError::coded("unknownRoom", format!("no room {room_id}")))?;
         let now = Utc::now();
-        let mut group = rooms::verify_group_membership(
-            &request.membership,
-            holder,
-            self.resolver.as_ref(),
-            now,
-        )
-        .await?;
-        self.status_ok(&request.membership, "the membership credential")
-            .await?;
+        let mut group =
+            rooms::verify_group_membership(membership, holder, self.resolver.as_ref(), now)
+                .await
+                .map_err(|e| not_eligible(e.to_string()))?;
+        self.status_ok(membership, "the membership credential")
+            .await
+            .map_err(not_eligible)?;
 
         let mut via = Vec::new();
-        let mut links = request.chain.iter();
+        let mut links = chain.iter();
         for _ in 0..=MAX_CHAIN {
             // Registered here, for the room's role, by a current member?
             let registered = self
@@ -118,7 +114,7 @@ impl Network {
                     .await?
                     .is_some_and(|e| e.state.is_membership());
                 if !current {
-                    return Err(refuse("the group's member is not a current member"));
+                    return Err(not_eligible("the group's member is not a current member"));
                 }
                 let mut pass = rooms::room_pass(
                     self.did(),
@@ -136,18 +132,21 @@ impl Network {
                 });
             }
             // Otherwise the next link must lift this group into a network's group.
-            let link = links
-                .next()
-                .ok_or_else(|| refuse("the evidence does not reach a group registered here"))?;
-            let verified = rooms::verify_link(link, self.resolver.as_ref(), now).await?;
+            let link = links.next().ok_or_else(|| {
+                not_eligible("the evidence does not reach a group registered here")
+            })?;
+            let verified = rooms::verify_link(link, self.resolver.as_ref(), now)
+                .await
+                .map_err(|e| chain_invalid(e.to_string()))?;
             if verified.group != group {
-                return Err(refuse("the chain is out of order"));
+                return Err(chain_invalid("the chain is out of order"));
             }
             self.status_ok(&link.acceptance, "a group acceptance")
-                .await?;
+                .await
+                .map_err(chain_invalid)?;
             via.push(verified.network.clone());
             group = network_group_id(&verified.network, &verified.role);
         }
-        Err(refuse("the chain is too long"))
+        Err(chain_invalid("the chain is too long"))
     }
 }

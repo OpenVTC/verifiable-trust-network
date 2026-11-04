@@ -11,6 +11,7 @@
 //! | `broadcasts` | message id | [`BroadcastRecord`](crate::broadcast::BroadcastRecord) |
 //! | `relay_seen` | message id | first-seen time |
 //! | `outbox` | `<message id>\u{0}<group>` | [`OutboxItem`](crate::broadcast::OutboxItem) |
+//! | `accepted_ids` | Trust Task document `id` | [`AcceptedId`](crate::tasks::accepted::AcceptedId) |
 
 use std::path::Path;
 
@@ -48,6 +49,7 @@ pub struct VtnStore {
     broadcasts: KeyspaceHandle,
     relay_seen: KeyspaceHandle,
     outbox: KeyspaceHandle,
+    accepted_ids: KeyspaceHandle,
 }
 
 const NEXT_INDEX: &str = "next";
@@ -67,6 +69,7 @@ impl VtnStore {
             broadcasts: store.keyspace("broadcasts")?,
             relay_seen: store.keyspace("relay_seen")?,
             outbox: store.keyspace("outbox")?,
+            accepted_ids: store.keyspace("accepted_ids")?,
         })
     }
 
@@ -245,6 +248,11 @@ impl VtnStore {
         self.relay_seen
             .insert_if_absent(id, &chrono::Utc::now())
             .await
+    }
+
+    /// The accepted-document-id record (`crate::tasks::accepted`).
+    pub fn accepted_ids(&self) -> &KeyspaceHandle {
+        &self.accepted_ids
     }
 }
 

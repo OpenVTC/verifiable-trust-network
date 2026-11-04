@@ -15,8 +15,12 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{Duration, Utc};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use trust_tasks_rs::RequestPayload;
+use vti_specs_vtn::vtn as specs;
 use vti_vtn::credentials::member;
 use vti_vtn::groups;
 use vti_vtn::identity::Identity;
@@ -24,9 +28,14 @@ use vti_vtn::model::{Framework, Visibility};
 use vti_vtn::relay::{self, Envelope};
 use vti_vtn::status::{Bitstring, Purpose, credential_status, status_list_credential};
 use vti_vtn::verify::LocalDidKeyResolver;
-use vti_vtn::{VtnClient, encode_did};
+use vti_vtn::{ClientError, VtnClient};
 use vtn_service::config::{Config, DirectoryConfig, MembershipConfig, NetworkConfig};
 use vtn_service::identity::VtaKeyResolver;
+
+use specs::listings::{create::v0_1 as create, show::v0_1 as show, suspend::v0_1 as suspend};
+use specs::membership::{
+    acknowledge::v0_1 as acknowledge, offer::v0_1 as offer, repudiate::v0_1 as repudiate,
+};
 
 mod support;
 use support::tls;
@@ -40,7 +49,73 @@ struct Live {
     _dir: tempfile::TempDir,
     url: String,
     did: String,
-    admin: VtnClient,
+    /// The operator's NNM identity, an administrator of this network.
+    operator: Identity,
+}
+
+impl Live {
+    fn client(&self) -> VtnClient {
+        https(&self.url)
+    }
+
+    /// Task `P` with `payload`, signed by `who`; the response as JSON, or the refusal.
+    async fn task<P>(&self, who: &Identity, payload: Value) -> Result<Value, ClientError>
+    where
+        P: RequestPayload + DeserializeOwned,
+        P::Response: Serialize,
+    {
+        let payload: P = serde_json::from_value(payload).expect("a valid payload");
+        let answer = self.client().task(who, &self.did, &payload).await?;
+        Ok(serde_json::to_value(answer).unwrap())
+    }
+
+    /// Task `P`, unsigned.
+    async fn read<P>(&self, payload: Value) -> Result<Value, ClientError>
+    where
+        P: RequestPayload + DeserializeOwned,
+        P::Response: Serialize,
+    {
+        let payload: P = serde_json::from_value(payload).expect("a valid payload");
+        let answer = self.client().read_task(&self.did, &payload).await?;
+        Ok(serde_json::to_value(answer).unwrap())
+    }
+
+    /// Task `P` as the operator, which must succeed.
+    async fn admin<P>(&self, payload: Value) -> Value
+    where
+        P: RequestPayload + DeserializeOwned,
+        P::Response: Serialize,
+    {
+        let operator = self.operator.clone();
+        self.task::<P>(&operator, payload)
+            .await
+            .unwrap_or_else(|e| panic!("{}: {e}", P::TYPE_URI))
+    }
+
+    /// `who` registers `group` for `role`, deliveries to `endpoint`: the network's answer.
+    async fn register(
+        &self,
+        who: &Identity,
+        role: &str,
+        group: &str,
+        endpoint: &str,
+    ) -> Result<Value, ClientError> {
+        let registration = groups::register(who, &self.did, role, group, endpoint)
+            .await
+            .unwrap();
+        self.client().send_request(&registration, &self.did).await
+    }
+}
+
+/// The code of a refusal.
+fn code(result: Result<Value, ClientError>) -> String {
+    match result {
+        Err(e) => e
+            .code()
+            .unwrap_or_else(|| panic!("not a refusal: {e}"))
+            .to_string(),
+        Ok(v) => panic!("expected a refusal, got {v}"),
+    }
 }
 
 async fn serve(app: Router) -> String {
@@ -101,13 +176,11 @@ async fn live_with(
     let did = state.network.did().to_string();
     let app = vtn_service::routes::router(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut admin = https(&url);
-    admin.sign_in(&operator, &did, None).await.unwrap();
     Live {
         _dir: dir,
         url,
         did,
-        admin,
+        operator,
     }
 }
 
@@ -146,75 +219,60 @@ impl Inboxes {
 
 /// A community joins `net`: listed by its admin, registers its admins group, acknowledges.
 async fn community_joins(net: &Live, community: &Identity, label: &str, inbox: &str) {
-    net.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": community.did(), "kind": "community", "label": label }),
-        )
-        .await
-        .unwrap();
-    let client = https(&net.url);
+    net.admin::<create::Payload>(
+        json!({ "did": community.did(), "kind": "community", "label": label }),
+    )
+    .await;
     let at = Utc::now() - Duration::seconds(5);
 
-    // Acknowledging before registering the required role is refused.
-    let offer = client
-        .get(&format!(
-            "/v1/entries/{}/offer",
-            encode_did(community.did())
-        ))
+    // Acknowledging before registering the required role is refused, naming the role.
+    let offered = net
+        .task::<offer::Payload>(community, json!({}))
         .await
         .unwrap();
-    let ack = member::acknowledge(&offer, community, at, None)
+    let ack = member::acknowledge(&offered["offer"], community, at, None)
         .await
         .unwrap();
-    let early = client
-        .post(
-            &format!("/v1/entries/{}/acknowledge", encode_did(community.did())),
-            &json!({ "acknowledgement": ack }),
-        )
-        .await;
+    let early = net
+        .task::<acknowledge::Payload>(community, json!({ "acknowledgement": ack }))
+        .await
+        .unwrap_err();
     assert_eq!(
-        early.unwrap_err().status(),
-        Some(422),
+        early.code(),
+        Some("vtn/membership/acknowledge:rolesUnregistered"),
         "required role first"
     );
+    match early {
+        ClientError::Refused { details, .. } => {
+            assert_eq!(details.unwrap()["roles"], json!(["admins"]));
+        }
+        other => panic!("{other}"),
+    }
 
     let group = format!("{}:groups:admins", community.did());
-    let registration = groups::register(community, &net.did, "admins", &group, inbox)
+    let registered = net
+        .register(community, "admins", &group, inbox)
         .await
         .unwrap();
-    client
-        .post(
-            &format!("/v1/entries/{}/groups", encode_did(community.did())),
-            &json!({ "registration": registration }),
-        )
+    assert_eq!(registered["group"]["group"], group);
+    let acknowledged = net
+        .task::<acknowledge::Payload>(community, json!({ "acknowledgement": ack }))
         .await
         .unwrap();
-    let entry = client
-        .post(
-            &format!("/v1/entries/{}/acknowledge", encode_did(community.did())),
-            &json!({ "acknowledgement": ack }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(entry["state"], "acknowledged");
+    assert_eq!(acknowledged["entry"]["state"], "acknowledged");
 }
 
 /// `child` is listed by `parent` and joins it, serving `admins` with its own network group.
 async fn network_joins(parent: &Live, child: &Live, label: &str) -> Value {
     parent
-        .admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": child.did, "kind": "network", "label": label }),
-        )
-        .await
-        .unwrap();
+        .admin::<create::Payload>(json!({ "did": child.did, "kind": "network", "label": label }))
+        .await;
     child
-        .admin
-        .post("/v1/admin/memberships", &json!({ "url": parent.url }))
-        .await
-        .unwrap()
+        .admin::<specs::memberships::join::v0_1::Payload>(
+            json!({ "url": parent.url, "network": parent.did, "roles": [] }),
+        )
+        .await["membership"]
+        .clone()
 }
 
 fn total_reached(record: &Value) -> u64 {
@@ -238,52 +296,29 @@ async fn broadcast_cascades_through_nested_networks() {
         membership["groups"][0]["group"],
         format!("{}#role-admins", au.did)
     );
-    let entry = whn
-        .admin
-        .get(&format!("/v1/admin/entries/{}", encode_did(&au.did)))
-        .await
-        .unwrap();
-    assert_eq!(entry["state"], "acknowledged");
+    let entry = whn.admin::<show::Payload>(json!({ "did": au.did })).await;
+    assert_eq!(entry["entry"]["state"], "acknowledged");
 
-    // Health-AU is members-only; St Vincent's is listed there and joins.
-    // (A restricted network makes a listed party sign in for its offer.)
+    // Health-AU is members-only; St Vincent's is listed there and joins, asking as itself.
     let stv = Identity::generate();
-    au.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": stv.did(), "kind": "community", "label": "St Vincent's" }),
-        )
-        .await
-        .unwrap();
-    let mut stv_client = https(&au.url);
-    stv_client.sign_in(&stv, &au.did, None).await.unwrap();
+    au.admin::<create::Payload>(
+        json!({ "did": stv.did(), "kind": "community", "label": "St Vincent's" }),
+    )
+    .await;
     let at = Utc::now() - Duration::seconds(5);
-    let registration = groups::register(
+    au.register(
         &stv,
-        &au.did,
         "admins",
         &format!("{}:groups:admins", stv.did()),
         &format!("{inbox_url}/inbox/stv"),
     )
     .await
     .unwrap();
-    stv_client
-        .post(
-            &format!("/v1/entries/{}/groups", encode_did(stv.did())),
-            &json!({ "registration": registration }),
-        )
+    let offered = au.task::<offer::Payload>(&stv, json!({})).await.unwrap();
+    let ack = member::acknowledge(&offered["offer"], &stv, at, None)
         .await
         .unwrap();
-    let offer = stv_client
-        .get(&format!("/v1/entries/{}/offer", encode_did(stv.did())))
-        .await
-        .unwrap();
-    let ack = member::acknowledge(&offer, &stv, at, None).await.unwrap();
-    stv_client
-        .post(
-            &format!("/v1/entries/{}/acknowledge", encode_did(stv.did())),
-            &json!({ "acknowledgement": ack }),
-        )
+    au.task::<acknowledge::Payload>(&stv, json!({ "acknowledgement": ack }))
         .await
         .unwrap();
 
@@ -292,13 +327,11 @@ async fn broadcast_cascades_through_nested_networks() {
 
     // --- WHN broadcasts to all admins.
     let record = whn
-        .admin
-        .post(
-            "/v1/admin/broadcasts",
-            &json!({ "role": "admins", "subject": "Drill", "body": "Exercise at 09:00 UTC" }),
+        .admin::<specs::broadcasts::send::v0_1::Payload>(
+            json!({ "role": "admins", "subject": "Drill", "body": "Exercise at 09:00 UTC" }),
         )
-        .await
-        .unwrap();
+        .await["broadcast"]
+        .clone();
     // MSF directly, St Vincent's through Health-AU; WHN's copy back through the cycle is a
     // duplicate and reaches nobody.
     assert_eq!(total_reached(&record), 2, "{record:#}");
@@ -335,9 +368,11 @@ async fn broadcast_cascades_through_nested_networks() {
     assert_eq!(inboxes.of("msf").await.len(), 1);
 
     // Health-AU recorded the relay, but holds nothing of WHN's roster.
-    let au_log = au.admin.get("/v1/admin/broadcasts").await.unwrap();
-    assert_eq!(au_log[0]["direction"], "received");
-    assert_eq!(au_log[0]["from"], whn.did);
+    let au_log = au
+        .admin::<specs::broadcasts::list::v0_1::Payload>(json!({}))
+        .await;
+    assert_eq!(au_log["broadcasts"][0]["direction"], "received");
+    assert_eq!(au_log["broadcasts"][0]["from"], whn.did);
 
     // --- A delivery from a network Health-AU is not a member of is refused.
     let rogue = Identity::generate();
@@ -359,30 +394,23 @@ async fn broadcast_cascades_through_nested_networks() {
     let hop = relay::new_hop(&rogue, &id, &format!("{}#role-admins", au.did), "admins", 0)
         .await
         .unwrap();
-    let refused = https(&au.url)
-        .post(
-            "/v1/relay/admins",
-            &json!({ "envelope": { "message": message, "hops": [hop] } }),
+    let refused = au
+        .task::<specs::relay::deliver::v0_1::Payload>(
+            &rogue,
+            json!({ "role": "admins", "envelope": { "message": message, "hops": [hop] } }),
         )
         .await;
-    assert_eq!(refused.unwrap_err().status(), Some(422));
+    assert_eq!(code(refused), "vtn/relay/deliver:notMember");
 
     // --- A suspended member's groups are skipped.
-    whn.admin
-        .post(
-            &format!("/v1/admin/entries/{}/suspend", encode_did(msf.did())),
-            &json!({}),
-        )
-        .await
-        .unwrap();
+    whn.admin::<suspend::Payload>(json!({ "did": msf.did() }))
+        .await;
     let record = whn
-        .admin
-        .post(
-            "/v1/admin/broadcasts",
-            &json!({ "role": "admins", "subject": "Second", "body": "…" }),
+        .admin::<specs::broadcasts::send::v0_1::Payload>(
+            json!({ "role": "admins", "subject": "Second", "body": "…" }),
         )
-        .await
-        .unwrap();
+        .await["broadcast"]
+        .clone();
     assert!(
         record["receipts"]
             .as_array()
@@ -395,35 +423,26 @@ async fn broadcast_cascades_through_nested_networks() {
 
     // --- Health-AU leaves WHN: departed there, its group dropped, StV no longer reached.
     let left = au
-        .admin
-        .post(
-            &format!("/v1/admin/memberships/{}/leave", encode_did(&whn.did)),
-            &json!({}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(left["state"], "departed");
-    let entry = whn
-        .admin
-        .get(&format!("/v1/admin/entries/{}", encode_did(&au.did)))
-        .await
-        .unwrap();
-    assert_eq!(entry["state"], "departed");
-    let groups = whn.admin.get("/v1/admin/groups?role=admins").await.unwrap();
+        .admin::<specs::memberships::leave::v0_1::Payload>(json!({ "network": whn.did }))
+        .await;
+    assert_eq!(left["membership"]["state"], "departed");
+    let entry = whn.admin::<show::Payload>(json!({ "did": au.did })).await;
+    assert_eq!(entry["entry"]["state"], "departed");
+    let groups = whn
+        .admin::<specs::groups::list::v0_1::Payload>(json!({ "role": "admins" }))
+        .await;
     assert!(
-        groups
+        groups["groups"]
             .as_array()
             .unwrap()
             .iter()
             .all(|g| g["member"] != au.did)
     );
-    whn.admin
-        .post(
-            "/v1/admin/broadcasts",
-            &json!({ "role": "admins", "subject": "Third", "body": "…" }),
-        )
-        .await
-        .unwrap();
+    // Broadcasting again no longer reaches St Vincent's through Health-AU.
+    whn.admin::<specs::broadcasts::send::v0_1::Payload>(
+        json!({ "role": "admins", "subject": "Third", "body": "…" }),
+    )
+    .await;
     assert_eq!(inboxes.of("stv").await.len(), 2);
 }
 
@@ -431,43 +450,41 @@ async fn broadcast_cascades_through_nested_networks() {
 async fn a_network_can_repudiate_a_parent_listing() {
     let whn = live("WHN", false, Visibility::Public).await;
     let nz = live("Health-NZ", false, Visibility::Public).await;
-    whn.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": nz.did, "kind": "network", "label": "Health-NZ" }),
-        )
-        .await
-        .unwrap();
+    whn.admin::<create::Payload>(json!({ "did": nz.did, "kind": "network", "label": "Health-NZ" }))
+        .await;
     let m = nz
-        .admin
-        .post(
-            "/v1/admin/memberships/repudiate",
-            &json!({ "url": whn.url }),
+        .admin::<specs::memberships::repudiate::v0_1::Payload>(
+            json!({ "url": whn.url, "network": whn.did }),
         )
+        .await;
+    assert_eq!(m["membership"]["state"], "repudiated");
+    let entry = whn
+        .read::<specs::entries::show::v0_1::Payload>(json!({ "did": nz.did }))
         .await
         .unwrap();
-    assert_eq!(m["state"], "repudiated");
-    let (_, entry) = (
-        (),
-        https(&whn.url)
-            .get(&format!("/v1/entries/{}", encode_did(&nz.did)))
-            .await
-            .unwrap(),
-    );
-    assert_eq!(entry["state"], "repudiated");
+    assert_eq!(entry["entry"]["state"], "repudiated");
     assert!(
-        entry["repudiation"].is_object(),
+        entry["entry"]["repudiation"].is_object(),
         "published with the repudiation"
     );
 
     // A network that was never listed cannot join.
     let stranger = live("Stranger", false, Visibility::Public).await;
-    let err = stranger
-        .admin
-        .post("/v1/admin/memberships", &json!({ "url": whn.url }))
-        .await
-        .unwrap_err();
-    assert_eq!(err.status(), Some(422), "{err}");
+    let refused = stranger
+        .task::<specs::memberships::join::v0_1::Payload>(
+            &stranger.operator,
+            json!({ "url": whn.url, "network": whn.did, "roles": [] }),
+        )
+        .await;
+    assert_eq!(code(refused), "vtn/memberships/join:notListed");
+    // Nor join the network at a URL that answers as another.
+    let refused = stranger
+        .task::<specs::memberships::join::v0_1::Payload>(
+            &stranger.operator,
+            json!({ "url": whn.url, "network": nz.did, "roles": [] }),
+        )
+        .await;
+    assert_eq!(code(refused), "vtn/memberships/join:networkMismatch");
 }
 
 /// A community serving its own status list, to check a person's credential against.
@@ -506,29 +523,7 @@ async fn status_server(community: &Identity, revoked: &[u32]) -> String {
 async fn member_credentials_are_checked_against_the_communitys_status_list() {
     let whn = live("WHN", false, Visibility::Members).await;
     let msf = Identity::generate();
-    whn.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": msf.did(), "kind": "community", "label": "MSF" }),
-        )
-        .await
-        .unwrap();
-    let mut client = https(&whn.url);
-    client.sign_in(&msf, &whn.did, None).await.unwrap();
-    let offer = client
-        .get(&format!("/v1/entries/{}/offer", encode_did(msf.did())))
-        .await
-        .unwrap();
-    let ack = member::acknowledge(&offer, &msf, Utc::now() - Duration::seconds(5), None)
-        .await
-        .unwrap();
-    client
-        .post(
-            &format!("/v1/entries/{}/acknowledge", encode_did(msf.did())),
-            &json!({ "acknowledgement": ack }),
-        )
-        .await
-        .unwrap();
+    community_joins_open(&whn, &msf).await;
 
     let status_url = status_server(&msf, &[1]).await;
     let vmc = |index: Option<u32>, base: String| {
@@ -550,34 +545,35 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
             (person, serde_json::to_value(vmc).unwrap())
         }
     };
-    let sign_in = |person: Identity, vmc: Value| {
-        let url = whn.url.clone();
-        let did = whn.did.clone();
+    // The person reads the members-only directory, presenting the credential.
+    let search = |person: Identity, vmc: Value| {
+        let whn = &whn;
         async move {
-            https(&url)
-                .sign_in(&person, &did, Some(vmc))
-                .await
-                .map_err(|e| e.status())
+            whn.task::<specs::directory::search::v0_1::Payload>(
+                &person,
+                json!({ "membership": vmc }),
+            )
+            .await
         }
     };
 
     let (person, good) = vmc(Some(0), status_url.clone()).await;
-    assert!(sign_in(person, good).await.is_ok(), "status clear");
+    assert!(search(person, good).await.is_ok(), "status clear");
     let (person, revoked) = vmc(Some(1), status_url.clone()).await;
     assert_eq!(
-        sign_in(person, revoked).await.unwrap_err(),
-        Some(401),
+        code(search(person, revoked).await),
+        "permissionDenied",
         "revoked"
     );
-    let (person, unreachable) = vmc(Some(0), "http://127.0.0.1:9".into()).await;
+    let (person, unreachable) = vmc(Some(0), "https://127.0.0.1:9".into()).await;
     assert_eq!(
-        sign_in(person, unreachable).await.unwrap_err(),
-        Some(401),
+        code(search(person, unreachable).await),
+        "permissionDenied",
         "an unreachable status list is indeterminate, not valid"
     );
     let (person, no_status) = vmc(None, String::new()).await;
     assert!(
-        sign_in(person, no_status).await.is_ok(),
+        search(person, no_status).await.is_ok(),
         "validity window only"
     );
 }
@@ -585,18 +581,15 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
 /// `parent` lists `child` with its URL, and `child` joins.
 async fn network_joins_at(parent: &Live, child: &Live, label: &str) {
     parent
-        .admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": child.did, "kind": "network", "label": label, "url": child.url }),
+        .admin::<create::Payload>(
+            json!({ "did": child.did, "kind": "network", "label": label, "url": child.url }),
         )
-        .await
-        .unwrap();
+        .await;
     child
-        .admin
-        .post("/v1/admin/memberships", &json!({ "url": parent.url }))
-        .await
-        .unwrap();
+        .admin::<specs::memberships::join::v0_1::Payload>(
+            json!({ "url": parent.url, "network": parent.did, "roles": [] }),
+        )
+        .await;
 }
 
 #[tokio::test]
@@ -608,34 +601,25 @@ async fn federated_search_follows_member_networks_with_paths() {
     network_joins_at(&whn, &au, "Health-AU").await;
     network_joins_at(&au, &nsw, "Health-NSW").await;
     network_joins_at(&whn, &private, "Private-Net").await;
-    nsw.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": Identity::generate().did(), "kind": "community",
+    nsw.admin::<create::Payload>(
+        json!({ "did": Identity::generate().did(), "kind": "community",
                      "label": "St Vincent's Hospital", "tags": ["sydney"] }),
-        )
-        .await
-        .unwrap();
+    )
+    .await;
     // Listed by WHN but never acknowledged: not followed.
     let pending = live("Pending-Net", false, Visibility::Public).await;
-    whn.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": pending.did, "kind": "network", "url": pending.url }),
-        )
-        .await
-        .unwrap();
+    whn.admin::<create::Payload>(
+        json!({ "did": pending.did, "kind": "network", "url": pending.url }),
+    )
+    .await;
     pending
-        .admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": Identity::generate().did(), "kind": "community", "label": "Vincent Hidden" }),
+        .admin::<create::Payload>(
+            json!({ "did": Identity::generate().did(), "kind": "community", "label": "Vincent Hidden" }),
         )
-        .await
-        .unwrap();
+        .await;
 
-    let found = https(&whn.url)
-        .get("/v1/directory/federated?q=vincent")
+    let found = whn
+        .read::<specs::directory::federated::v0_1::Payload>(json!({ "q": "vincent" }))
         .await
         .unwrap();
     let results = found["results"].as_array().unwrap();
@@ -660,10 +644,11 @@ async fn federated_search_follows_member_networks_with_paths() {
     );
 
     // The graph view expands a member network from its verified index.
-    let au_graph = https(&whn.url)
-        .get(&format!("/v1/graph/member/{}", encode_did(&au.did)))
+    let au_graph = whn
+        .read::<specs::graph::member::v0_1::Payload>(json!({ "did": au.did }))
         .await
-        .unwrap();
+        .unwrap()["graph"]
+        .clone();
     assert_eq!(au_graph["nodes"][0]["id"], au.did);
     assert!(
         au_graph["nodes"]
@@ -673,130 +658,38 @@ async fn federated_search_follows_member_networks_with_paths() {
             .any(|n| n["id"] == nsw.did)
     );
     // Not for a network that never acknowledged.
-    let err = https(&whn.url)
-        .get(&format!("/v1/graph/member/{}", encode_did(&pending.did)))
-        .await
-        .unwrap_err();
-    assert_eq!(err.status(), Some(404));
+    let refused = whn
+        .read::<specs::graph::member::v0_1::Payload>(json!({ "did": pending.did }))
+        .await;
+    assert_eq!(code(refused), "vtn/graph/member:notMember");
 
     // Plain (non-federated) search sees only WHN's own entries.
-    let own = https(&whn.url)
-        .get("/v1/directory?q=vincent")
+    let own = whn
+        .read::<specs::directory::search::v0_1::Payload>(json!({ "q": "vincent" }))
         .await
         .unwrap();
-    assert!(own.as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn browser_sign_in_is_handed_to_a_wallet_and_back() {
-    let whn = live("WHN", false, Visibility::Members).await;
-    let other = live("Other", false, Visibility::Public).await;
-    let msf = Identity::generate();
-    community_joins_open(&whn, &msf).await;
-
-    // The page starts a login; nobody has signed yet.
-    let page = https(&whn.url);
-    let start = page.post("/v1/auth/login", &json!({})).await.unwrap();
-    let (login, secret) = (
-        start["login"].as_str().unwrap(),
-        start["pollSecret"].as_str().unwrap(),
-    );
-    let poll = |secret: &str| format!("/v1/auth/login/{login}?secret={secret}");
-    assert_eq!(page.get(&poll(secret)).await.unwrap()["status"], "pending");
-    assert_eq!(
-        page.get(&poll("wrong")).await.unwrap_err().status(),
-        Some(401)
-    );
-
-    // A link whose endpoint answers as another network is refused before anything is signed.
-    let mismatched = vti_vtn::SignInLink {
-        network: whn.did.clone(),
-        endpoint: other.url.clone(),
-        challenge: start["challenge"].as_str().unwrap().into(),
-    };
-    assert!(mismatched.complete(&msf, None).await.is_err());
-
-    // The wallet (here, the member community itself) signs the link.
-    let link = vti_vtn::SignInLink::parse(
-        &vti_vtn::SignInLink {
-            network: start["audience"].as_str().unwrap().into(),
-            endpoint: whn.url.clone(),
-            challenge: start["challenge"].as_str().unwrap().into(),
-        }
-        .to_uri(),
-    )
-    .unwrap();
-    // What `SignInLink::complete` does, over a client that trusts the test authority.
-    let wallet = https(&link.endpoint);
-    assert_eq!(wallet.network_did().await.unwrap(), link.network);
-    let authentication = msf
-        .sign_document_for(
-            json!({
-                "type": "VtnAdminAuthentication",
-                "did": msf.did(),
-                "challenge": link.challenge,
-                "audience": link.network,
-            }),
-            vti_vtn::verify::AUTHENTICATION,
-        )
-        .await
-        .unwrap();
-    let grant = wallet
-        .post(
-            "/v1/auth/session",
-            &json!({ "authentication": authentication }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(grant["role"], "memberEntity");
-
-    // The page collects the session once, and it opens the members-only directory.
-    let done = page.get(&poll(secret)).await.unwrap();
-    assert_eq!(done["status"], "complete");
-    assert_eq!(
-        page.get(&poll(secret)).await.unwrap_err().status(),
-        Some(401),
-        "handed over once"
-    );
-    let token = done["session"]["token"].as_str().unwrap();
-    let res = tls::client()
-        .get(format!("{}/v1/directory", whn.url))
-        .bearer_auth(token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-
-    // The challenge was single use.
-    assert!(link.complete(&msf, None).await.is_err());
+    assert!(own["entries"].as_array().unwrap().is_empty());
 }
 
 /// A community joins a network with no required roles.
 async fn community_joins_open(net: &Live, community: &Identity) {
-    net.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": community.did(), "kind": "community", "label": "MSF" }),
-        )
+    net.admin::<create::Payload>(
+        json!({ "did": community.did(), "kind": "community", "label": "MSF" }),
+    )
+    .await;
+    let offered = net
+        .task::<offer::Payload>(community, json!({}))
         .await
         .unwrap();
-    let mut client = https(&net.url);
-    client.sign_in(community, &net.did, None).await.unwrap();
-    let offer = client
-        .get(&format!(
-            "/v1/entries/{}/offer",
-            encode_did(community.did())
-        ))
-        .await
-        .unwrap();
-    let ack = member::acknowledge(&offer, community, Utc::now() - Duration::seconds(5), None)
-        .await
-        .unwrap();
-    client
-        .post(
-            &format!("/v1/entries/{}/acknowledge", encode_did(community.did())),
-            &json!({ "acknowledgement": ack }),
-        )
+    let ack = member::acknowledge(
+        &offered["offer"],
+        community,
+        Utc::now() - Duration::seconds(5),
+        None,
+    )
+    .await
+    .unwrap();
+    net.task::<acknowledge::Payload>(community, json!({ "acknowledgement": ack }))
         .await
         .unwrap();
 }
@@ -839,22 +732,14 @@ async fn flaky_inbox(fails: u32, refuse: bool) -> (String, Arc<Mutex<Vec<Value>>
 /// A community joins `net` and registers a group (role not required) at `endpoint`.
 async fn join_with_group(net: &Live, community: &Identity, endpoint: &str) {
     community_joins_open(net, community).await;
-    let registration = groups::register(
+    net.register(
         community,
-        &net.did,
         "admins",
         &format!("{}:groups:admins", community.did()),
         endpoint,
     )
     .await
     .unwrap();
-    https(&net.url)
-        .post(
-            &format!("/v1/entries/{}/groups", encode_did(community.did())),
-            &json!({ "registration": registration }),
-        )
-        .await
-        .unwrap();
 }
 
 #[tokio::test]
@@ -870,13 +755,11 @@ async fn failed_deliveries_are_queued_and_retried() {
     join_with_group(&whn, &dead, "https://127.0.0.1:9/").await;
 
     let record = whn
-        .admin
-        .post(
-            "/v1/admin/broadcasts",
-            &json!({ "role": "admins", "subject": "Retry", "body": "…" }),
+        .admin::<specs::broadcasts::send::v0_1::Payload>(
+            json!({ "role": "admins", "subject": "Retry", "body": "…" }),
         )
-        .await
-        .unwrap();
+        .await["broadcast"]
+        .clone();
     let status_of = |record: &Value, who: &Identity| {
         record["receipts"]
             .as_array()
@@ -896,30 +779,28 @@ async fn failed_deliveries_are_queued_and_retried() {
         "a refusal is final"
     );
     assert_eq!(record["reached"], 0);
-    let outbox = whn.admin.get("/v1/admin/outbox").await.unwrap();
-    assert_eq!(outbox.as_array().unwrap().len(), 2);
+    let outbox = whn
+        .admin::<specs::outbox::list::v0_1::Payload>(json!({}))
+        .await;
+    assert_eq!(outbox["items"].as_array().unwrap().len(), 2);
 
     let retried = whn
-        .admin
-        .post("/v1/admin/outbox/retry", &json!({}))
-        .await
-        .unwrap();
+        .admin::<specs::outbox::retry::v0_1::Payload>(json!({}))
+        .await;
     assert_eq!(retried["attempted"], 2);
     let id = record["id"].as_str().unwrap();
     let record = whn
-        .admin
-        .get(&format!(
-            "/v1/admin/broadcasts/{}",
-            vti_vtn::encode_query(id)
-        ))
-        .await
-        .unwrap();
+        .admin::<specs::broadcasts::show::v0_1::Payload>(json!({ "id": id }))
+        .await["broadcast"]
+        .clone();
     assert_eq!(status_of(&record, &flaky), "delivered");
     assert_eq!(record["reached"], 1);
     assert_eq!(flaky_got.lock().await.len(), 1);
     // The dead endpoint stays queued, its attempts counted.
-    let outbox = whn.admin.get("/v1/admin/outbox").await.unwrap();
-    let left = outbox.as_array().unwrap();
+    let outbox = whn
+        .admin::<specs::outbox::list::v0_1::Payload>(json!({}))
+        .await;
+    let left = outbox["items"].as_array().unwrap();
     assert_eq!(left.len(), 1);
     assert_eq!(left[0]["member"], dead.did());
     assert_eq!(left[0]["attempts"], 2);
@@ -930,23 +811,14 @@ async fn failed_deliveries_are_queued_and_retried() {
 /// Returns the chain link for that group: the registration and the network's acceptance.
 async fn join_registering(net: &Live, community: &Identity, group: &Identity) -> ChainLinkJson {
     community_joins_open(net, community).await;
-    let registration = groups::register(
-        community,
-        &net.did,
-        "admins",
-        group.did(),
-        "https://127.0.0.1:9/",
-    )
-    .await
-    .unwrap();
-    let registered = https(&net.url)
-        .post(
-            &format!("/v1/entries/{}/groups", encode_did(community.did())),
-            &json!({ "registration": registration }),
-        )
+    let registered = net
+        .register(community, "admins", group.did(), "https://127.0.0.1:9/")
         .await
         .unwrap();
-    json!({ "registration": registration, "acceptance": registered["acceptance"]["credential"] })
+    json!({
+        "registration": registered["group"]["registration"],
+        "acceptance": registered["group"]["acceptance"],
+    })
 }
 
 type ChainLinkJson = Value;
@@ -969,37 +841,19 @@ async fn community_vmc(issuer: &Identity, person: &Identity) -> Value {
     serde_json::to_value(vmc).unwrap()
 }
 
-/// `person` asks `net` for a pass to `room`.
+/// `person` asks `net` for a pass to the room `pandemic`, signing the request themselves.
 async fn ask_pass(
     net: &Live,
     person: &Identity,
     membership: Value,
     chain: Vec<Value>,
-) -> Result<Value, Option<u16>> {
-    let client = https(&net.url);
-    let challenge = client
-        .post("/v1/auth/challenge", &json!({ "did": person.did() }))
-        .await
-        .unwrap();
-    let authentication = person
-        .sign_document_for(
-            json!({
-                "type": "VtnAdminAuthentication",
-                "did": person.did(),
-                "challenge": challenge["challenge"],
-                "audience": net.did,
-            }),
-            vti_vtn::verify::AUTHENTICATION,
-        )
-        .await
-        .unwrap();
-    client
-        .post(
-            "/v1/rooms/pandemic/pass",
-            &json!({ "authentication": authentication, "membership": membership, "chain": chain }),
-        )
-        .await
-        .map_err(|e| e.status())
+) -> Result<Value, ClientError> {
+    net.task::<specs::rooms::pass::v0_1::Payload>(
+        person,
+        json!({ "room": "pandemic", "membership": membership, "chain": chain }),
+    )
+    .await
+    .map(|answer| answer["pass"].clone())
 }
 
 #[tokio::test]
@@ -1015,20 +869,14 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
     let whn = live_with("WHN", false, Visibility::Public, vec![room]).await;
     let au = live("Health-AU", false, Visibility::Public).await;
     // Health-AU serves WHN's admins with its network group.
-    whn.admin
-        .post(
-            "/v1/admin/entries",
-            &json!({ "did": au.did, "kind": "network" }),
-        )
-        .await
-        .unwrap();
-    au.admin
-        .post(
-            "/v1/admin/memberships",
-            &json!({ "url": whn.url, "roles": [{ "parentRole": "admins", "localRole": "admins" }] }),
-        )
-        .await
-        .unwrap();
+    whn.admin::<create::Payload>(json!({ "did": au.did, "kind": "network" }))
+        .await;
+    au.admin::<specs::memberships::join::v0_1::Payload>(json!({
+        "url": whn.url,
+        "network": whn.did,
+        "roles": [{ "parentRole": "admins", "localRole": "admins" }],
+    }))
+    .await;
 
     // St Vincent's (in Health-AU) registers its admins group; a person is in that group.
     let stv = Identity::generate();
@@ -1037,8 +885,12 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
     let person = Identity::generate();
     let vmc = group_vmc(&stv_admins, &person).await;
 
-    let rooms = https(&whn.url).get("/v1/rooms").await.unwrap();
-    assert_eq!(rooms[0]["id"], "pandemic");
+    let rooms = whn
+        .read::<specs::rooms::list::v0_1::Payload>(json!({}))
+        .await
+        .unwrap();
+    assert_eq!(rooms["rooms"][0]["id"], "pandemic");
+    assert_eq!(rooms["rooms"][0]["passMinutes"], 30);
 
     // Through Health-AU: one link.
     let pass = ask_pass(&whn, &person, vmc.clone(), vec![link.clone()])
@@ -1073,54 +925,59 @@ async fn room_passes_follow_group_evidence_through_member_networks() {
 
     // Missing the link: refused.
     assert_eq!(
-        ask_pass(&whn, &person, vmc.clone(), vec![])
-            .await
-            .unwrap_err(),
-        Some(422)
+        code(ask_pass(&whn, &person, vmc.clone(), vec![]).await),
+        "vtn/rooms/pass:notEligible"
     );
-    // A group nobody registered: refused.
+    // A group nobody registered: the link does not lift it.
     let stranger_group = Identity::generate();
     let stranger = Identity::generate();
     assert_eq!(
-        ask_pass(
-            &whn,
-            &stranger,
-            group_vmc(&stranger_group, &stranger).await,
-            vec![link.clone()]
-        )
-        .await
-        .unwrap_err(),
-        Some(422)
+        code(
+            ask_pass(
+                &whn,
+                &stranger,
+                group_vmc(&stranger_group, &stranger).await,
+                vec![link.clone()]
+            )
+            .await
+        ),
+        "vtn/rooms/pass:chainInvalid"
     );
     // Someone else presenting the person's credential: refused.
     let thief = Identity::generate();
     assert_eq!(
-        ask_pass(&whn, &thief, vmc.clone(), vec![link.clone()])
+        code(ask_pass(&whn, &thief, vmc.clone(), vec![link.clone()]).await),
+        "vtn/rooms/pass:notEligible"
+    );
+    // A room that does not exist.
+    assert_eq!(
+        code(
+            whn.task::<specs::rooms::pass::v0_1::Payload>(
+                &person,
+                json!({ "room": "nowhere", "membership": vmc, "chain": [] }),
+            )
             .await
-            .unwrap_err(),
-        Some(422)
+        ),
+        "vtn/rooms/pass:unknownRoom"
     );
 
     // St Vincent's leaves Health-AU: its acceptance is revoked, and the chain no longer holds.
+    let own = au
+        .task::<specs::entries::show::v0_1::Payload>(&stv, json!({ "did": stv.did() }))
+        .await
+        .unwrap();
     let departure = member::repudiate(
-        &https(&au.url)
-            .get(&format!("/v1/entries/{}", encode_did(stv.did())))
-            .await
-            .unwrap()["grant"],
+        &own["entry"]["grant"],
         &stv,
         Utc::now() - Duration::seconds(5),
     )
     .await
     .unwrap();
-    https(&au.url)
-        .post(
-            &format!("/v1/entries/{}/repudiate", encode_did(stv.did())),
-            &json!({ "repudiation": departure }),
-        )
+    au.task::<repudiate::Payload>(&stv, json!({ "repudiation": departure }))
         .await
         .unwrap();
     assert_eq!(
-        ask_pass(&whn, &person, vmc, vec![link]).await.unwrap_err(),
-        Some(422)
+        code(ask_pass(&whn, &person, vmc, vec![link]).await),
+        "vtn/rooms/pass:chainInvalid"
     );
 }

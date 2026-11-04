@@ -12,7 +12,7 @@ status_cache_seconds = 300
 # Certificate authorities to trust beside the system's when calling other parties over
 # HTTPS (a private CA). Endpoints are always https://.
 # extra_root_certificates = ["/etc/vtn/private-ca.pem"]
-# Administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
+# Administrators: the DIDs their NNMs sign requests as (`nnm keys generate`).
 admins = ["did:key:z6Mk...replace-me"]
 
 [network]
@@ -53,7 +53,7 @@ description = "Where each member wants network notices delivered"
 [relay]
 accept = true      # relay broadcasts from parent networks into this network's groups
 max_hops = 8
-ttl_hours = 72
+ttl_hours = 24
 max_attempts = 8           # delivery attempts per group before giving up
 retry_base_seconds = 30    # first retry delay; doubles each attempt, capped at an hour
 

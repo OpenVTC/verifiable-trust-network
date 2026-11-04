@@ -12,8 +12,8 @@ credential.
 
 | Crate | What |
 |---|---|
-| `vtn-service` | The `vtn` binary. It holds the network's VTA-provisioned identity (`vtn setup`), a fjall-backed store (via `vti-common`), the HTTP API, and admin sign-in by DID. |
-| `nnm-cli` | The `nnm` binary, the **Network Network Manager**. It is the operator CLI for VTNs, as `pnm` is for a person and `cnm` for a community. It holds the operator's admin key, signs in to networks, and runs curation commands. |
+| `vtn-service` | The `vtn` binary. It holds the network's VTA-provisioned identity (`vtn setup`), a fjall-backed store (via `vti-common`), and the `vtn/*` Trust Task API. |
+| `nnm-cli` | The `nnm` binary, the **Network Network Manager**. It is the operator CLI for VTNs, as `pnm` is for a person and `cnm` for a community. It holds the operator's admin key and signs each request to a network with it. |
 
 ## Status
 
@@ -28,16 +28,17 @@ Phase 1 of the delivery plan, implemented:
 - **Network actions.** The network can suspend, reinstate and remove entries. These are reflected in W3C Bitstring Status Lists, for revocation and suspension.
 - **Publishing.** Signed network index, DTG graph export (one edge per credential), and an audit log.
 - **VTA-provisioned identity.** The network's `did:webvh` and keys come from its VTA (VTI-VTN-001). Parties' `did:webvh` keys are resolved with purpose checks.
-- **Admin access.** Administrators are DIDs. They sign in by challenge-response from the `nnm`.
-- **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), using its own identity, and can later leave or repudiate.
-- **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
+- **Trust Task API.** Every operation is a `vtn/*` Trust Task (trusttasks.org, `vtn/*/0.1`), signed by its caller: there is no sign-in and no session. A Trust Task answer is never evidence of a relationship; the credentials it carries are (`docs/trust-tasks.md`).
+- **Admin access.** Administrators are DIDs, listed in `admins`. The `nnm` signs each request with the operator's admin key.
+- **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), sending the parent `vtn/*` tasks signed by its own identity, and can later leave or repudiate.
+- **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks receive it as `vtn/relay/deliver` and relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
 - **Network rooms.** `[[rooms]]` opens a room for a role. A person in any group registered for that role, directly or through member networks, gets a short-lived room pass by presenting their group evidence.
 - **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
-- **Wallet sign-in.** Members and admins sign in to the landing page from a wallet, via a `vtn-signin:` link (`nnm login` for admins).
-- **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. Members sign in as their VTC or VTN DID, or as a person presenting a membership credential from a member community.
+- **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). The page reads with unsigned Trust Tasks, so it shows a `public` directory. `[directory] visibility` is `public`, `members` or `admins`: a member reads as its VTC or VTN DID, or as a person presenting a membership credential from a member community, with its own tools for now.
 
 Not yet built (see the design's delivery plan):
-- the VTC-side network-membership module (acknowledge, register groups, relay to members)
+- browser sign-in on the landing page: a wallet approving the page's key through `auth/oob/*` (A13)
+- the VTC side on `vtn/*` tasks (`vtc/networks/*` 0.2); a community's group inbox is still `{ envelope }` over HTTPS (A15)
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
 - TSP/DIDComm delivery transports (A15)
@@ -79,70 +80,47 @@ nnm entries [<did>]
 nnm list <did> --kind community|network [--label <label>] [--description …] [--url …] [--tag …]
 nnm profile <did> [--label …] [--description …] [--url …] [--tag …]
 nnm directory [terms…] [--kind community|network] [--members-only] [--federated]
-nnm token
-nnm login '<vtn-signin: link>' [--membership vmc.json]   # sign a landing page's sign-in as a wallet
 nnm roles
 nnm groups [--role admins]
 nnm broadcast --role admins --subject "…" --body "…" [--class notice] [--reply-to <room>]
 nnm broadcasts [<id>]
 nnm outbox [--retry]
 nnm rooms
-nnm memberships list | join <url> [--role parent=local] | serve <parent> <parent=local> | leave <parent> | repudiate <url>
+nnm memberships list | join <url> [--parent <did>] [--role parent=local] | serve <parent> <parent=local> | leave <parent> | repudiate <url> [--parent <did>]
 nnm suspend|reinstate|remove <did> [--reason <text>]
 nnm graph [--include-exited] [--out graph.json]
-nnm index
+nnm index                     # public directories only (A21)
 nnm audit
 ```
 
 ## API
 
-**Public:**
+Everything is a `vtn/*` 0.1 Trust Task at `POST /v1/trust-tasks`, signed for
+`authentication` by its caller (`vti_vtn::tasks`, `VtnClient::task`). The contract and the
+error codes are in [`docs/trust-tasks.md`](docs/trust-tasks.md); the normative specifications
+are on [trusttasks.org](https://trusttasks.org/spec/vtn/).
 
-| Method | Path | |
-|---|---|---|
-| GET | `/` | Landing page with the searchable directory |
-| GET | `/.well-known/vtn` | DID, profile and directory visibility |
-| GET | `/v1/directory?q=&kind=&state=&members_only=` | Directory search (visibility-gated) |
-| GET | `/v1/directory/federated?q=…` | Search including member networks' signed indexes; results carry their path |
-| GET | `/v1/directory/summary` | Member counts (public unless `show_counts = false`) |
-| GET | `/v1/index` | Signed index of published entries, each with `kind` and `acknowledged` |
-| GET | `/v1/graph` | DTG graph: nodes, and one edge per credential with its status |
-| GET | `/v1/graph/member/{did}` | A member network's graph, from its verified signed index |
-| GET | `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
-| GET | `/v1/credentials/{id}` | A credential the network issued or holds |
-| GET | `/v1/entries/{did}` | One published entry |
-| GET | `/v1/entries/{did}/offer` | Unsigned VMC grant, for the listed party to acknowledge |
-| POST | `/v1/entries/{did}/acknowledge` | `{ "acknowledgement": <VMC signed by did> }` |
-| POST | `/v1/entries/{did}/repudiate` | `{ "repudiation": <VSC signed by did> }` |
-| POST | `/v1/entries/{did}/groups` | `{ "registration": <servesRole VSC signed by did> }` registers a group for a role |
-| GET | `/v1/rooms` | The network's rooms (visibility-gated) |
-| POST | `/v1/rooms/{id}/pass` | `{ authentication, membership, chain }` gets a room pass on group evidence |
-| POST | `/v1/relay/{role}` | `{ "envelope" }`: a parent network delivers a broadcast to this network's group |
+| Who | Tasks |
+|---|---|
+| A listed party | `entries/show`, `membership/{offer,acknowledge,repudiate}`, `groups/register`, `roles/list` |
+| A parent network this one joined | `relay/deliver` |
+| A person | `rooms/{list,pass}` |
+| A reader the directory admits | `directory/{search,federated,summary}`, `graph/{show,member}`, `entries/show`, `roles/list`, `rooms/list` (unsigned under `visibility = "public"`) |
+| An administrator | `listings/{create,update,suspend,reinstate,remove,list,show}`, `audit/list`, `groups/list`, `broadcasts/{send,list,show}`, `outbox/{list,retry}`, `memberships/{list,join,repudiate,leave,groups/add}` |
 
-Index, graph, entries, credentials and directory follow `[directory] visibility`.
+Only what is fetched by URL stays a plain `GET`:
 
-**Sign-in:** `POST /v1/auth/challenge { did }`, then `POST /v1/auth/session { authentication }`. The `authentication` document is `{ type: "VtnAdminAuthentication", did, challenge, audience }`, signed for `authentication`. A person may add `membership`: a VMC from a member community naming them. For a browser, `POST /v1/auth/login` starts a sign-in whose challenge any DID may sign. A wallet completes it from a `vtn-signin:` link, and the page collects the session from `GET /v1/auth/login/{id}?secret=…`. The session's role is decided at sign-in: admin, member (entity or by credential), or listed. `GET /v1/auth/session` shows it.
+| Path | |
+|---|---|
+| `/` | Landing page with the searchable directory |
+| `/.well-known/vtn` | DID, profile, roles and directory visibility |
+| `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
+| `/v1/index` | Signed index of published entries (`visibility = "public"` only, A21) |
+| `/v1/credentials/{id}` | A credential the network issued or holds (`visibility = "public"` only, A21) |
 
-**Admin** (`Authorization: Bearer <session>`):
-
-| Method | Path | |
-|---|---|---|
-| POST | `/v1/admin/entries` | `{ "did", "kind": "community"\|"network", "label"? }` lists a party |
-| GET | `/v1/admin/entries[/{did}]` | Full entries, including history |
-| POST | `/v1/admin/entries/{did}/{suspend\|reinstate\|remove}` | `{ "reason"? }` |
-| GET | `/v1/admin/graph?include_exited=true` | Graph, including removed and departed entries |
-| POST | `/v1/admin/entries/{did}/profile` | `{ "label"?, "description"?, "url"?, "tags"? }` edits the directory profile |
-| GET | `/v1/admin/audit` | Audit log, with the acting admin DID |
-| GET | `/v1/admin/whoami` | The signed-in admin |
-| GET | `/v1/admin/roles` | Roles |
-| GET | `/v1/admin/groups?role=` | Registered groups |
-| POST/GET | `/v1/admin/broadcasts[/{id}]` | Send `{ role, subject, body, class?, replyTo? }`, or list broadcasts with their receipts |
-| GET/POST | `/v1/admin/outbox[/retry]` | Deliveries queued for retry; force a retry pass |
-| POST/GET | `/v1/admin/memberships` | Join a parent `{ url, roles? }`, or list memberships |
-| POST | `/v1/admin/memberships/{parent}/{leave\|groups}` | Leave, or serve another of the parent's roles |
-| POST | `/v1/admin/memberships/repudiate` | `{ url }` repudiates a parent's listing |
-
-A listed party signs with `vti_vtn::credentials::member::{acknowledge, repudiate}`.
+A listed party signs its acknowledgement and repudiation with
+`vti_vtn::credentials::member::{acknowledge, repudiate}`, and its group registration with
+`vti_vtn::groups::register`.
 
 ## Repository
 

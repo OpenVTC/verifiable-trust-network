@@ -329,7 +329,7 @@ support goes in `cnm-cli`.
 ## 11. Delivery plan
 
 **Progress (2026-11-02):** Phases 1–4 are implemented for the network side, in `vtn-core`, `vtn-client`, `vtn-service` and `nnm-cli` (`vtn-core` and `vtn-client` have since moved into VTI as `vti-vtn`):
-- VTA-provisioned identity, and admin, member and wallet sign-in by DID.
+- VTA-provisioned identity, and admin and member access by DID: every request a signed `vtn/*` Trust Task (`docs/trust-tasks.md`).
 - Listing and membership lifecycle with status lists.
 - Directory with visibility, federated search, and the trust graph view.
 - Nested membership, roles, required-role admission, and cascading broadcast with a durable retry queue.

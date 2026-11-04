@@ -108,7 +108,7 @@ pub struct RelayConfig {
     /// Refuse an envelope that has already been through more hops than this.
     #[serde(default = "default_max_hops")]
     pub max_hops: usize,
-    /// Lifetime of a broadcast this network originates, in hours.
+    /// Lifetime of a broadcast this network originates, in hours: at most 168 (7 days, A20).
     #[serde(default = "default_ttl_hours")]
     pub ttl_hours: i64,
     /// Delivery attempts per group before giving up (the first included).
@@ -136,7 +136,7 @@ fn default_max_hops() -> usize {
 }
 
 fn default_ttl_hours() -> i64 {
-    72
+    24
 }
 
 fn default_max_attempts() -> u32 {
@@ -226,10 +226,17 @@ impl Config {
                 errors.push(format!("roles: {:?} is defined twice", role.name));
             }
         }
+        if !(1..=24 * 7).contains(&self.relay.ttl_hours) {
+            errors.push(format!(
+                "relay: ttl_hours must be 1..=168 (a broadcast lasts at most 7 days), not {}",
+                self.relay.ttl_hours
+            ));
+        }
         for room in &self.rooms {
-            if !vti_vtn::groups::valid_role_name(&room.id) {
+            if !valid_room_id(&room.id) {
                 errors.push(format!(
-                    "rooms: id {:?} must be lowercase letters, digits, '-' or '_'",
+                    "rooms: id {:?} must start with a lowercase letter or digit, then up to 62 \
+                     lowercase letters, digits or '-'",
                     room.id
                 ));
             }
@@ -267,4 +274,14 @@ impl Config {
     pub fn store_dir(&self) -> PathBuf {
         self.data_dir.join("store")
     }
+}
+
+/// A room id as `vtn/_shared/0.1` `RoomDef.id` has it: `^[a-z0-9][a-z0-9-]{0,62}$`.
+fn valid_room_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id.len() <= 63
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }

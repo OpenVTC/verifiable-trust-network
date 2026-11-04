@@ -1,6 +1,6 @@
 # The VTN over Trust Tasks
 
-This is the contract for moving `vtn-service` from its interim REST API (A9) to Trust Tasks. The `vtn/*` specifications in `dtgwg-trust-tasks-tf` are written from it. Once they are published, they are normative and this file is history.
+This is the contract for moving `vtn-service` from its interim REST API (A9) to Trust Tasks. The `vtn/*` 0.1 specifications in `dtgwg-trust-tasks-tf` were written from it and are published on trusttasks.org; they are normative, and where this file and they differ, they win. `vtn-service` serves all 33 (`vtn-service/src/tasks/`).
 
 ## What stays REST
 
@@ -14,7 +14,7 @@ Only artifacts that verifiers and browsers fetch by URL stay REST:
 | `GET /v1/index` | the signed network index, a self-verifying document (VTI-VTN-024) |
 | `GET /v1/credentials/{id}` | a credential by `id`, so a graph edge can be dereferenced |
 
-The index and credential fetch keep `[directory] visibility`. In a restricted network they answer only a request carrying a signed Trust Task document in the `Trust-Task` header, which is the VTI convention for authenticated GETs. Everything else is a Trust Task at `POST /v1/trust-tasks`. `/v1/auth/*` goes away.
+The index and credential fetch are served under `[directory] visibility = "public"` only (A21): VTI's `Trust-Task` header names a task's Type URI and carries no signed document, so an unsigned `GET` cannot be authenticated. In a restricted network the same credentials come through `vtn/entries/show` and `vtn/graph/show`. Everything else is a Trust Task at `POST /v1/trust-tasks`. `/v1/auth/*` is gone.
 
 ## Who is asking
 
@@ -45,7 +45,7 @@ Every operation is a Trust Task, but no Trust Task document is ever the evidence
 | a person's membership | the person's VMC from a member community | community → person |
 | room pass | a short-lived credential | network → person |
 
-A Trust Task carries these credentials and asks for them to be issued. Its signature authenticates the request, and only the request. `servesRole/1` is retired: the member's signed `vtn/groups/register` request replaces it, and the `groupRegistered/1` acceptance binds that request by digest. The digest is SHA-256 over the JCS form of the request **including** its proof (the step digest, not the task digest), so a re-signed copy is a different registration. A registered endpoint is `https://`. Room-pass chains carry `ChainLink { registration, acceptance }`. A verifier checks each acceptance's signature, its digest and its status. A status that is revoked, suspended or cannot be determined fails the check (VTI-REG-012).
+A Trust Task carries these credentials and asks for them to be issued. Its signature authenticates the request, and only the request. `servesRole/1` is retired: the member's signed `vtn/groups/register` request replaces it, and the `groupRegistered/1` acceptance binds that request by digest. The digest is SHA-256 over the JCS form of the request **including** its proof (the step digest, not the task digest), so a re-signed copy is a different registration. A registered endpoint is `https://`; a network registers its own `/v1/trust-tasks`, where deliveries come as `vtn/relay/deliver`. Room-pass chains carry `ChainLink { registration, acceptance }`. A verifier checks each acceptance's signature, its digest and its status. A status that is revoked, suspended or cannot be determined fails the check (VTI-REG-012).
 
 ## Lifetimes
 

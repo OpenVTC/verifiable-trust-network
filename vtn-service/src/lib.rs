@@ -2,8 +2,9 @@
 //!
 //! [`network::Network`] holds the logic, [`routes`] exposes it over HTTP, and [`store`]
 //! persists it in a `vti-common` store (fjall), the same backend the VTA and VTC use. The
-//! network's identity is provisioned by a VTA ([`setup`], [`identity`]). Administrators sign
-//! in with a DID ([`auth`]), which is what the NNM does.
+//! API is `vtn/*` Trust Tasks ([`tasks`]); [`routes`] serves only what is fetched by URL. The
+//! network's identity is provisioned by a VTA ([`setup`], [`identity`]). Every request is
+//! signed, and its signer is the caller ([`auth`]).
 
 pub mod auth;
 pub mod broadcast;
@@ -18,6 +19,7 @@ pub mod rooms;
 pub mod routes;
 pub mod setup;
 pub mod store;
+pub mod tasks;
 
 use std::sync::Arc;
 
@@ -88,11 +90,7 @@ pub async fn build_state_with(
         owner: config.network.owner.clone(),
         framework: config.network.framework.clone(),
     };
-    let auth = Auth::new(
-        identity.did().to_string(),
-        config.admins.clone(),
-        resolver.clone(),
-    );
+    let auth = Auth::new(config.admins.clone());
     let mut extra_roots = Vec::new();
     for path in &config.extra_root_certificates {
         let pem = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
@@ -101,6 +99,7 @@ pub async fn build_state_with(
                 .with_context(|| format!("{} is not a PEM certificate bundle", path.display()))?,
         );
     }
+    let accepted = crate::tasks::accepted::StoreAcceptedIds::new(store.accepted_ids().clone());
     let network = Network::new(
         profile,
         identity,
@@ -121,6 +120,7 @@ pub async fn build_state_with(
         network: Arc::new(network),
         auth: Arc::new(auth),
         directory: config.directory.clone(),
+        accepted,
     })
 }
 

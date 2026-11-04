@@ -9,6 +9,18 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 
 ### Features
 
+- **service**: the API is `vtn/*` 0.1 Trust Tasks at `POST /v1/trust-tasks`, all 33, through the shared `vti-trust-task-server` pipeline. Every request is signed by its caller and every answer by the network; there is no sign-in and no session. Duplicate ids are recorded in the store, so a document executes once even across a restart. Payloads and responses are held to their published schemas, and refusals carry the codes the specifications declare.
+- **service**: broadcasts reach a member network as `vtn/relay/deliver`, signed by the delivering network, which must be one the receiver joined. A network registers its `/v1/trust-tasks` as its group's endpoint.
+- **service**: this network joins, leaves and repudiates a parent over `vtn/*` tasks; `memberships/join` and `repudiate` name the parent's DID, and a URL answering as another network is `networkMismatch`.
+- **service**: repeated transitions are answered with the entry as it stands, and `listings/update` changes only the fields named (A22).
+- **nnm**: every command is a signed `vtn/*` task. `nnm token` and `nnm login` are gone with the sessions; `memberships join` and `repudiate` take `--parent <did>`.
+- **landing page**: reads the directory, counts and graph with unsigned `vtn/*` tasks.
+
+### Breaking
+
+- **service**: the REST API is removed (A9). Only `/`, `/.well-known/vtn`, `/v1/status/*`, `/v1/index` and `/v1/credentials/{id}` remain, and the last two only under `visibility = "public"` (A21). `/v1/auth/*`, sessions and the `vtn-signin:` link are gone; browser sign-in returns with `auth/oob/*` (A13).
+- **service**: `[relay] ttl_hours` defaults to 24 and may be at most 168; a room `id` must match `^[a-z0-9][a-z0-9-]{0,62}$` (A20).
+
 - **core**: listings and repudiations use the registered DTG predicates `https://registry.trustoverip.org/dtg/vsc/lists/1` and `…/repudiates/1` (dtgwg-vsc-registry #33). A listing's `object.value` is `{ nodeType: "VTC" | "VTN", framework }`, replacing `kind`. A joining network checks that its parent lists it with `nodeType: VTN`. Listings issued under the interim `openvtc.org` IRI must be re-issued.
 - **core**: VTN domain model: entries (community or network), the entry lifecycle (listed → acknowledged → suspended / repudiated / removed / departed), and DTG credential builders. A listing is a VSC under `lists/1` (A1). The membership offer is unsigned, and the VMC grant is signed only after the party's acknowledgement (A2). Repudiation and departure are VSCs under `repudiates/1`.
 - **core**: W3C Bitstring Status Lists for revocation and suspension, the signed network index (VTI-VTN-011/024/031), and the DTG graph export with one edge per credential.

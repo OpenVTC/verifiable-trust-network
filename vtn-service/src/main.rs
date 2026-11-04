@@ -75,6 +75,17 @@ async fn main() -> anyhow::Result<()> {
             state
                 .network
                 .spawn_retry_worker(std::time::Duration::from_secs(15));
+            // Accepted Trust Task ids are kept for their acceptance window, then dropped.
+            let accepted = state.accepted.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+                loop {
+                    tick.tick().await;
+                    if let Err(e) = accepted.prune(chrono::Utc::now()).await {
+                        tracing::warn!(error = %e, "pruning accepted Trust Task ids failed");
+                    }
+                }
+            });
             let listener = tokio::net::TcpListener::bind(&config.listen).await?;
             axum::serve(listener, vtn_service::routes::router(state))
                 .with_graceful_shutdown(async {

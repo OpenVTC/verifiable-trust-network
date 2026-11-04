@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 vti-vtn = { workspace = true }
+vti-specs-vtn = { workspace = true }
+trust-tasks-rs = { workspace = true }
 affinidi-secrets-resolver = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
