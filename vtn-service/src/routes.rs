@@ -50,6 +50,8 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     let artifacts = Router::new()
         .route("/", get(landing))
+        .route("/health", get(health))
+        .route("/health/ready", get(ready))
         .route("/.well-known/vtn", get(profile))
         .route("/v1/status/{purpose}", get(status_list))
         .route("/v1/index", get(index))
@@ -102,6 +104,34 @@ fn require_public(state: &AppState) -> ApiResult<()> {
         Ok(())
     } else {
         Err(ApiError::Forbidden)
+    }
+}
+
+/// `GET /health`: liveness. The process is up and serving; nothing is checked. Only what
+/// is public already (the network DID, also at `/.well-known/vtn`), no infrastructure
+/// detail, as the VTC's and the VTA's `/health`.
+async fn health(State(s): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "did": s.network.did(),
+    }))
+}
+
+/// `GET /health/ready`: readiness. 200 when the network can answer: its store reads (the
+/// identity is loaded before the service starts, or it does not start). 503 otherwise, with
+/// the cause in the log, not the answer.
+async fn ready(State(s): State<AppState>) -> Response {
+    match s.network.store.ping().await {
+        Ok(()) => Json(json!({ "status": "ready", "checks": { "store": "ok" } })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "readiness: the store cannot be read");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "status": "unavailable", "checks": { "store": "failed" } })),
+            )
+                .into_response()
+        }
     }
 }
 
