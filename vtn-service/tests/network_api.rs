@@ -887,6 +887,24 @@ async fn an_unknown_task_is_refused_by_type() {
 }
 
 #[tokio::test]
+async fn health_and_readiness_answer_without_a_signature() {
+    // An admins-only directory: neither probe is gated by it.
+    let whn = network_with("WHN", Visibility::Admins, false).await;
+    let (status, live) = whn.get("/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live["status"], "ok");
+    assert_eq!(live["did"], whn.did());
+    assert_eq!(live["version"], env!("CARGO_PKG_VERSION"));
+
+    let (status, ready) = whn.get("/health/ready").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        ready,
+        json!({ "status": "ready", "checks": { "store": "ok" } })
+    );
+}
+
+#[tokio::test]
 async fn landing_page_is_served_with_a_strict_policy() {
     let whn = network("WHN").await;
     let res = whn

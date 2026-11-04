@@ -76,6 +76,11 @@ impl VtnStore {
         })
     }
 
+    /// A point read through the store, for readiness: fails if the store cannot be read.
+    pub async fn ping(&self) -> Result<(), AppError> {
+        self.status.get_raw(NEXT_INDEX).await.map(|_| ())
+    }
+
     pub async fn entry(&self, did: &str) -> Result<Option<Entry>, AppError> {
         self.entries.get(did).await
     }

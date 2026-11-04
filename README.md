@@ -116,6 +116,8 @@ Only what is fetched by URL stays a plain `GET`:
 | `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
 | `/v1/index` | Signed index of published entries (`visibility = "public"` only, A21) |
 | `/v1/credentials/{id}` | A credential the network issued or holds (`visibility = "public"` only, A21) |
+| `/health` | Liveness: `{status, version, did}`, nothing checked |
+| `/health/ready` | Readiness: 200 when the store reads, 503 when it does not |
 
 A listed party signs its acknowledgement and repudiation with
 `vti_vtn::credentials::member::{acknowledge, repudiate}`, and its group registration with

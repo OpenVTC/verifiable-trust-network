@@ -13,6 +13,7 @@ Only artifacts that verifiers and browsers fetch by URL stay REST:
 | `GET /v1/status/{purpose}` | Bitstring Status Lists, dereferenced from `credentialStatus` |
 | `GET /v1/index` | the signed network index, a self-verifying document (VTI-VTN-024) |
 | `GET /v1/credentials/{id}` | a credential by `id`, so a graph edge can be dereferenced |
+| `GET /health`, `GET /health/ready` | liveness and readiness probes for an orchestrator, which signs nothing |
 
 The index and credential fetch are served under `[directory] visibility = "public"` only (A21): VTI's `Trust-Task` header names a task's Type URI and carries no signed document, so an unsigned `GET` cannot be authenticated. In a restricted network the same credentials come through `vtn/entries/show` and `vtn/graph/show`. Everything else is a Trust Task at `POST /v1/trust-tasks`. `/v1/auth/*` is gone.
 
