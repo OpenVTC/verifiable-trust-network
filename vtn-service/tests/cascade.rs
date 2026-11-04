@@ -40,9 +40,10 @@ use specs::membership::{
 mod support;
 use support::tls;
 
-/// A client for a test server, trusting the test authority.
+/// A client for a test server, trusting the test authority, verifying its answers (the
+/// networks here are `did:key`s).
 fn https(url: &str) -> VtnClient {
-    VtnClient::with_http(tls::client(), url)
+    VtnClient::with_http(tls::client(), url).verifying(Arc::new(VtaKeyResolver::offline()))
 }
 
 struct Live {
