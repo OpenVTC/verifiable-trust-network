@@ -24,23 +24,23 @@ type_complexity = "allow"
 [workspace.dependencies]
 # The VTN protocol, shared with the VTC: model, credentials, verification, groups, relay,
 # rooms, and (feature `client`) the `vtn/*` Trust Task client.
-vti-vtn = { version = "0.2", features = ["client"] }
+vti-vtn = { version = "0.3", features = ["client"] }
 # The receive side of the `vtn/*` Trust Tasks (`POST /v1/trust-tasks`), shared with the VTC.
-vti-trust-task-server = "0.1"
+vti-trust-task-server = "0.2"
 # The generated `vtn/*` 0.1 payload and response types, and their schema index.
-vti-specs-vtn = "0.1"
+vti-specs-vtn = "0.2"
 # `auth/oob/*` wallet sign-in for the landing page, shared with the VTC.
 vti-oob-server = "0.1"
-vti-specs-core = "0.3"
+vti-specs-core = "0.4"
 trust-tasks-rs = { version = "0.37.0", default-features = false }
 async-trait = "0.1"
 
 dtg-credentials = "0.13"
 affinidi-secrets-resolver = "0.5.15"
 affinidi-data-integrity = "0.8"
-vti-common = "0.55"
-vti-secrets = "0.28"
-vta-sdk = { version = "0.79", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
+vti-common = "0.56"
+vti-secrets = "0.29"
+vta-sdk = { version = "0.80", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
 affinidi-did-resolver-cache-sdk = { version = "0.8.43", features = ["network"] }
 
 anyhow = "1"
@@ -63,15 +63,3 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-
-# Until VTI release #2418 is on crates.io: build against a VTI checkout at main.
-# Remove once published.
-[patch.crates-io]
-vti-oob-server = { path = "../../vti-worktrees/main-ref/vti-oob-server" }
-vti-common = { path = "../../vti-worktrees/main-ref/vti-common" }
-vta-sdk = { path = "../../vti-worktrees/main-ref/vta-sdk" }
-vti-trust-task-server = { path = "../../vti-worktrees/main-ref/vti-trust-task-server" }
-vti-vtn = { path = "../../vti-worktrees/main-ref/vti-vtn" }
-vti-specs-vtn = { path = "../../vti-worktrees/main-ref/vti-specs-vtn" }
-vti-specs-core = { path = "../../vti-worktrees/main-ref/vti-specs-core" }
-vti-secrets = { path = "../../vti-worktrees/main-ref/vti-secrets" }
