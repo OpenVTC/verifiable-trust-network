@@ -27,7 +27,7 @@ use vti_vtn::identity::Identity;
 use vti_vtn::model::{Framework, Visibility};
 use vti_vtn::relay::{self, Envelope};
 use vti_vtn::status::{Bitstring, Purpose, credential_status, status_list_credential};
-use vti_vtn::verify::LocalDidKeyResolver;
+use vti_vtn::verify::{AUTHENTICATION, LocalDidKeyResolver};
 use vti_vtn::{ClientError, VtnClient};
 use vtn_service::config::{Config, DirectoryConfig, MembershipConfig, NetworkConfig};
 use vtn_service::identity::VtaKeyResolver;
@@ -186,25 +186,49 @@ async fn live_with(
     }
 }
 
-/// Community group inboxes, keyed by name; each delivery is recorded.
+/// What a community answers a `vtc/networks/deliver`: the `#response`, signed by it.
+async fn community_answer(me: &Identity, request: &Value, status: &str) -> Value {
+    assert_eq!(
+        request["type"], "https://trusttasks.org/spec/vtc/networks/deliver/0.1",
+        "a community gets vtc/networks/deliver"
+    );
+    assert_eq!(request["payload"]["role"], "admins", "{request}");
+    let answer = json!({
+        "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+        "type": format!("{}#response", request["type"].as_str().unwrap()),
+        "issuer": me.did(),
+        "recipient": request["issuer"],
+        "threadId": request["id"],
+        "issuedAt": Utc::now().to_rfc3339(),
+        "payload": { "status": status },
+    });
+    me.sign_document_for(answer, AUTHENTICATION).await.unwrap()
+}
+
+/// Community group inboxes (Trust Task endpoints), keyed by name; each delivered envelope is
+/// recorded, and answered as the community whose key [`Inboxes::add`] gave.
 #[derive(Clone, Default)]
-struct Inboxes(Arc<Mutex<HashMap<String, Vec<Value>>>>);
+struct Inboxes {
+    got: Arc<Mutex<HashMap<String, Vec<Value>>>>,
+    keys: Arc<Mutex<HashMap<String, Identity>>>,
+}
 
 impl Inboxes {
     async fn start(&self) -> String {
         async fn deliver(
             State(inboxes): State<Inboxes>,
             Path(name): Path<String>,
-            Json(body): Json<Value>,
+            Json(request): Json<Value>,
         ) -> Json<Value> {
+            let me = inboxes.keys.lock().await[&name].clone();
             inboxes
-                .0
+                .got
                 .lock()
                 .await
                 .entry(name)
                 .or_default()
-                .push(body["envelope"].clone());
-            Json(json!({ "accepted": true }))
+                .push(request["payload"]["envelope"].clone());
+            Json(community_answer(&me, &request, "delivered").await)
         }
         serve(
             Router::new()
@@ -214,8 +238,16 @@ impl Inboxes {
         .await
     }
 
+    /// The inbox `name` answers as `community`.
+    async fn add(&self, name: &str, community: &Identity) {
+        self.keys
+            .lock()
+            .await
+            .insert(name.into(), community.clone());
+    }
+
     async fn of(&self, name: &str) -> Vec<Value> {
-        self.0.lock().await.get(name).cloned().unwrap_or_default()
+        self.got.lock().await.get(name).cloned().unwrap_or_default()
     }
 }
 
@@ -289,6 +321,7 @@ async fn broadcast_cascades_through_nested_networks() {
     let au = live("Health-AU", true, Visibility::Members).await;
 
     let msf = Identity::generate();
+    inboxes.add("msf", &msf).await;
     community_joins(&whn, &msf, "MSF", &format!("{inbox_url}/inbox/msf")).await;
 
     // Health-AU joins WHN by itself: its network group is registered for WHN's admins.
@@ -303,6 +336,7 @@ async fn broadcast_cascades_through_nested_networks() {
 
     // Health-AU is members-only; St Vincent's is listed there and joins, asking as itself.
     let stv = Identity::generate();
+    inboxes.add("stv", &stv).await;
     au.admin::<create::Payload>(
         json!({ "did": stv.did(), "kind": "community", "label": "St Vincent's" }),
     )
@@ -696,20 +730,33 @@ async fn community_joins_open(net: &Live, community: &Identity) {
         .unwrap();
 }
 
-/// An inbox that answers 500 `fails` times, then accepts; or always refuses with 403.
-async fn flaky_inbox(fails: u32, refuse: bool) -> (String, Arc<Mutex<Vec<Value>>>) {
+/// `community`'s inbox: answers 500 `fails` times, then accepts; or always refuses.
+async fn flaky_inbox(
+    community: &Identity,
+    fails: u32,
+    refuse: bool,
+) -> (String, Arc<Mutex<Vec<Value>>>) {
     let got = Arc::new(Mutex::new(Vec::new()));
     let left = Arc::new(Mutex::new(fails));
+    let me = community.clone();
     let (g, l) = (got.clone(), left.clone());
     let app = Router::new().route(
         "/",
-        post(move |Json(body): Json<Value>| {
-            let (g, l) = (g.clone(), l.clone());
+        post(move |Json(request): Json<Value>| {
+            let (g, l, me) = (g.clone(), l.clone(), me.clone());
             async move {
                 if refuse {
                     return (
-                        axum::http::StatusCode::FORBIDDEN,
-                        Json(json!({ "message": "no" })),
+                        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({
+                            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+                            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+                            "threadId": request["id"],
+                            "payload": {
+                                "code": "vtc/networks/deliver:roleUnregistered",
+                                "message": "no",
+                            },
+                        })),
                     );
                 }
                 let mut left = l.lock().await;
@@ -720,10 +767,10 @@ async fn flaky_inbox(fails: u32, refuse: bool) -> (String, Arc<Mutex<Vec<Value>>
                         Json(json!({})),
                     );
                 }
-                g.lock().await.push(body);
+                g.lock().await.push(request["payload"]["envelope"].clone());
                 (
                     axum::http::StatusCode::OK,
-                    Json(json!({ "accepted": true })),
+                    Json(community_answer(&me, &request, "delivered").await),
                 )
             }
         }),
@@ -747,11 +794,11 @@ async fn join_with_group(net: &Live, community: &Identity, endpoint: &str) {
 #[tokio::test]
 async fn failed_deliveries_are_queued_and_retried() {
     let whn = live("WHN", false, Visibility::Public).await;
-    let (flaky_url, flaky_got) = flaky_inbox(1, false).await;
-    let (refusing_url, _) = flaky_inbox(0, true).await;
     let flaky = Identity::generate();
     let refusing = Identity::generate();
     let dead = Identity::generate();
+    let (flaky_url, flaky_got) = flaky_inbox(&flaky, 1, false).await;
+    let (refusing_url, _) = flaky_inbox(&refusing, 0, true).await;
     join_with_group(&whn, &flaky, &flaky_url).await;
     join_with_group(&whn, &refusing, &refusing_url).await;
     join_with_group(&whn, &dead, "https://127.0.0.1:9/").await;

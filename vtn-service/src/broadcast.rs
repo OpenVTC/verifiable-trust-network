@@ -15,9 +15,9 @@
 //! is in them.
 //!
 //! Delivery is HTTPS, one request per group per hop: a `vtn/relay/deliver` Trust Task, signed
-//! by this network, to a member network's group (`<network DID>#role-<role>`, A14), and
-//! `{ envelope }` posted to any other group's endpoint (a community's inbox, until
-//! `vtc/networks` 0.2 gives communities a task for it). A delivery that fails in transport is
+//! by this network, to a member network's group (`<network DID>#role-<role>`, A14), and a
+//! `vtc/networks/deliver` Trust Task, also signed by this network, to a member community's
+//! group, for the role its last hop names. A delivery that fails in transport is
 //! **queued** in the store and retried with exponential backoff, until it succeeds, the
 //! message expires, or `relay.max_attempts` is reached. The broadcast's receipt is updated
 //! as it goes. A refusal is final, and not retried.
@@ -30,6 +30,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::task::JoinSet;
+use vti_specs_vtc::vtc::networks::deliver::v0_1 as community;
 use vti_specs_vtn::vtn::relay::deliver::v0_1 as specs;
 use vti_vtn::VtnError;
 use vti_vtn::groups::network_group_id;
@@ -502,17 +503,7 @@ async fn deliver(
     receipt: impl Fn(DeliveryStatus, Option<String>, Option<Vec<Receipt>>) -> Receipt,
 ) -> Receipt {
     let Some(role) = target.network_role() else {
-        // A community's inbox: any 2xx is acceptance.
-        return match client
-            .post_url(target.endpoint, &json!({ "envelope": envelope }))
-            .await
-        {
-            Ok(_) => receipt(DeliveryStatus::Delivered, None, None),
-            Err(e) if matches!(e.status(), Some(403 | 422)) => {
-                receipt(DeliveryStatus::Refused, Some(e.to_string()), None)
-            }
-            Err(e) => receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
-        };
+        return deliver_to_community(client, identity, target, envelope, receipt).await;
     };
     let payload: specs::Payload = match serde_json::from_value(json!({
         "role": role,
@@ -531,6 +522,52 @@ async fn deliver(
     {
         Ok(r) => receipt(r.status, None, Some(r.relayed)),
         // The member network declined it: final. A server-side failure may pass.
+        Err(e @ ClientError::Refused { status, .. }) if status < 500 => {
+            receipt(DeliveryStatus::Refused, Some(e.to_string()), None)
+        }
+        Err(e) => receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+    }
+}
+
+/// A member community's group: `vtc/networks/deliver` to its Trust Task endpoint, signed by
+/// this network, for the role the last hop names (this network's role). Its answer is the
+/// community's: `delivered` or `duplicate`, and no receipts of its own.
+async fn deliver_to_community(
+    client: &VtnClient,
+    identity: &Identity,
+    target: Target<'_>,
+    envelope: Envelope,
+    receipt: impl Fn(DeliveryStatus, Option<String>, Option<Vec<Receipt>>) -> Receipt,
+) -> Receipt {
+    let role = envelope
+        .hops
+        .last()
+        .and_then(|h| h["role"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let payload: community::Payload = match serde_json::from_value(json!({
+        "role": role,
+        "envelope": envelope,
+    })) {
+        Ok(p) => p,
+        Err(e) => return receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+    };
+    let request = match vti_vtn::tasks::sign_request(identity, target.member, &payload).await {
+        Ok(r) => r,
+        Err(e) => return receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+    };
+    match client
+        .send_request_to::<community::Response>(target.endpoint, &request, target.member)
+        .await
+    {
+        Ok(r) => {
+            let status = match serde_json::to_value(r.status) {
+                Ok(Value::String(s)) if s == "duplicate" => DeliveryStatus::Duplicate,
+                _ => DeliveryStatus::Delivered,
+            };
+            receipt(status, None, None)
+        }
+        // The community declined it: final. A server-side failure may pass.
         Err(e @ ClientError::Refused { status, .. }) if status < 500 => {
             receipt(DeliveryStatus::Refused, Some(e.to_string()), None)
         }

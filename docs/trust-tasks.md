@@ -152,4 +152,4 @@ These mirror `vtc/networks/*`, because a network joins a parent the way a commun
 2. Extract the VTC's Trust Task server spine into a shared VTI crate, and move `vtc-service` onto it.
 3. Add a `vti-specs-vtn` crate in VTI, and move the `vti-vtn` client onto Trust Tasks.
 4. Move `vtn-service`, `nnm` and the landing page onto Trust Tasks, and retire A9, A13 and the group VSCs.
-5. Write `vtc/networks/*` 0.2, so the VTC side uses `vtn/groups/register` and `vtn/membership/*`.
+5. Write `vtc/networks/*` 0.2, so the VTC side uses `vtn/groups/register` and `vtn/membership/*`. Done: `vtc/networks/*` 0.2 and `vtc/networks/deliver/0.1` (trustoverip/dtgwg-trust-tasks-tf#1033). A community takes broadcasts at its `/v1/trust-tasks` as `vtc/networks/deliver`, signed by the network that delivers them.
