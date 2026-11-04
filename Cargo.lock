@@ -1131,6 +1131,7 @@ dependencies = [
  "cipher 0.5.2",
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -1143,6 +1144,7 @@ dependencies = [
  "chacha20",
  "cipher 0.5.2",
  "poly1305 0.9.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -2326,12 +2328,13 @@ dependencies = [
 
 [[package]]
 name = "hpke"
-version = "0.14.1"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5324110b02044183df000f0bd7d2d7e61f1000631508627e77f63983b6fdffb"
+checksum = "8f512e325a1a71bf3273fb9b7fc9e5d96dac136fb4a95d0e6637001b12ea3e09"
 dependencies = [
  "aead 0.6.1",
  "chacha20poly1305",
+ "curve25519-dalek",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
  "hybrid-array",
@@ -2833,6 +2836,22 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
+version = "10.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "signature 2.2.0",
+ "zeroize",
+]
+
+[[package]]
+name = "jsonwebtoken"
 version = "11.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
@@ -3163,6 +3182,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "trust-tasks-rs",
+ "vti-specs-vtn",
  "vti-vtn",
 ]
 
@@ -4885,6 +4906,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -5025,6 +5047,25 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "trust-tasks-rs",
+ "uuid",
+]
+
+[[package]]
+name = "trust-tasks-https"
+version = "0.36.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e58d7c314818c25a4a7c4845a59e33b4b935f62c5e6a18f13c801fc1576ff9f"
+dependencies = [
+ "axum",
+ "chrono",
+ "jsonwebtoken 10.4.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower",
  "trust-tasks-rs",
  "uuid",
 ]
@@ -5313,9 +5354,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vta-sdk"
-version = "0.78.0"
+version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dfe75c6a2143a8821f3d918af1992d75e27e5653ca0130c21726cc305346ee0"
+checksum = "8b7ea311fd506b3ed23688658b43b38b2e69472ac86fd0be199f2b60224a9af1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -5361,9 +5402,9 @@ dependencies = [
 
 [[package]]
 name = "vti-common"
-version = "0.54.0"
+version = "0.55.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa2d597909085c22049f10a46d734bddfc36fd9fd4288ce1cd8187abf42ce0e6"
+checksum = "dd533f9ca6fd7c287be45f4d0348015525fd442b68b24f6f82965ba3d189e21d"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-resolver-cache-sdk",
@@ -5384,7 +5425,7 @@ dependencies = [
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "http-body-util",
- "jsonwebtoken",
+ "jsonwebtoken 11.1.0",
  "metrics",
  "multibase",
  "rand 0.10.3",
@@ -5407,9 +5448,9 @@ dependencies = [
 
 [[package]]
 name = "vti-secrets"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9349f3459d547285e25fb44bc77902b35bef902d491998c4994c49008cc259be"
+checksum = "201aea762aeef11def07870a0ce4b40ea248d5feaa8a0bcdad4cd4b312d9817d"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5426,22 +5467,23 @@ dependencies = [
 
 [[package]]
 name = "vti-specs"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de1af9ff4e47100ecf61ce6a7973a8d59fae48082a394a40fe98a2881af6e77d"
+checksum = "d2514317470879a3134e68f6c147e89d50ab75e494fbc91a52521376ddd94565"
 dependencies = [
  "trust-tasks-rs",
  "vti-specs-core",
  "vti-specs-rooms",
  "vti-specs-vta",
  "vti-specs-vtc",
+ "vti-specs-vtn",
 ]
 
 [[package]]
 name = "vti-specs-core"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a0e6ca07744fd3dc27208ef4f8874b22035a85082535798005b68b944badf1b"
+checksum = "e03da777ef36565f157a0726f5dac36838fa2dbced3a734668fc5026d7b35a92"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -5459,9 +5501,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-vta"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c57a5e773de87b9faccd99a6e397414365b866a5d4e630320f7d71061828bb55"
+checksum = "e0f73068cdd75ec01b843f7c74d9ed67dd0d0f4be3d7507c2cc823b61fc8c092"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -5469,9 +5511,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-vtc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "564a771bc25a38b86b89b7dc088626e9bcf963d00b6878f3b2c08f111cec4eb3"
+checksum = "7f46634a65199c242fbca4c10b6de25e2928c82b59872cb2c66f2072bac11bb7"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -5485,6 +5527,27 @@ checksum = "70250001b8411dcf645efd05ab2299548d88382776b27a1b250c0daf49be9431"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
+]
+
+[[package]]
+name = "vti-trust-task-server"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fa3c8199c11f701f53d1865a92ba26e307cf93b3839e6e959cc3f4111f3807"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer 0.4.1",
+ "tokio",
+ "tracing",
+ "trust-tasks-https",
+ "trust-tasks-rs",
+ "uuid",
+ "vta-sdk",
+ "vti-common",
 ]
 
 [[package]]
@@ -5520,6 +5583,7 @@ dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-secrets-resolver",
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "clap",
@@ -5539,10 +5603,13 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "vti-common",
  "vti-secrets",
+ "vti-specs-vtn",
+ "vti-trust-task-server",
  "vti-vtn",
 ]
 

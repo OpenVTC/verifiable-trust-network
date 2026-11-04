@@ -1,6 +1,6 @@
-//! The service end to end over HTTP, on the World Health Network example: WHN lists a
-//! national network (Health-AU, itself a running VTN) and a community (MSF); Health-AU
-//! acknowledges, MSF repudiates, then membership is suspended, reinstated and left.
+//! The service end to end over its Trust Task API, on the World Health Network example: WHN
+//! lists a national network (Health-AU, itself a running VTN) and a community (MSF);
+//! Health-AU acknowledges, MSF repudiates, then membership is suspended, reinstated and left.
 
 use std::sync::Arc;
 
@@ -8,17 +8,30 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use chrono::{Duration, Utc};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use trust_tasks_rs::Payload;
+use vti_specs_vtn::vtn as specs;
 use vti_vtn::credentials::member;
 use vti_vtn::identity::Identity;
 use vti_vtn::model::Visibility;
+use vti_vtn::request::{request_document, sign_request};
 use vti_vtn::status::Bitstring;
-use vti_vtn::verify::AUTHENTICATION;
-use vtn_service::auth::{Challenge, authentication_document};
 use vtn_service::config::{Config, DirectoryConfig, MembershipConfig, NetworkConfig};
 use vtn_service::identity::VtaKeyResolver;
 use vtn_service::routes::{AppState, router};
+
+use specs::directory::{search::v0_1 as search, summary::v0_1 as summary};
+use specs::entries::show::v0_1 as entries_show;
+use specs::graph::show::v0_1 as graph_show;
+use specs::listings::{
+    create::v0_1 as create, list::v0_1 as list, reinstate::v0_1 as reinstate,
+    remove::v0_1 as remove, show::v0_1 as show, suspend::v0_1 as suspend, update::v0_1 as update,
+};
+use specs::membership::{
+    acknowledge::v0_1 as acknowledge, offer::v0_1 as offer, repudiate::v0_1 as repudiate,
+};
 
 struct TestNetwork {
     _dir: tempfile::TempDir,
@@ -27,7 +40,42 @@ struct TestNetwork {
     app: Router,
     /// The operator's NNM identity, an administrator of this network.
     operator: Identity,
-    token: String,
+}
+
+/// A network's answer: the response payload, or the refusal.
+#[derive(Debug)]
+enum Answer {
+    Ok(Value),
+    Refused {
+        status: StatusCode,
+        code: String,
+        details: Value,
+    },
+}
+
+impl Answer {
+    fn ok(self) -> Value {
+        match self {
+            Answer::Ok(v) => v,
+            refused => panic!("expected a response, got {refused:?}"),
+        }
+    }
+
+    fn code(self) -> String {
+        self.refusal().1
+    }
+
+    /// The HTTP status, code and details of a refusal.
+    fn refusal(self) -> (StatusCode, String, Value) {
+        match self {
+            Answer::Refused {
+                status,
+                code,
+                details,
+            } => (status, code, details),
+            Answer::Ok(v) => panic!("expected a refusal, got {v}"),
+        }
+    }
 }
 
 fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config {
@@ -59,120 +107,37 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
 }
 
 async fn network(name: &str) -> TestNetwork {
-    network_with(name, Visibility::Public).await
+    network_with(name, Visibility::Public, true).await
 }
 
-async fn network_with(name: &str, visibility: Visibility) -> TestNetwork {
+async fn network_with(name: &str, visibility: Visibility, show_counts: bool) -> TestNetwork {
     let dir = tempfile::tempdir().unwrap();
     let operator = Identity::generate();
     let mut config = test_config(dir.path(), name, vec![operator.did().to_string()]);
     config.directory.visibility = visibility;
+    config.directory.show_counts = show_counts;
     vtn_service::init_dev(&config).unwrap();
     let state = vtn_service::build_state_with(&config, Arc::new(VtaKeyResolver::offline()))
         .await
         .unwrap();
     let app = router(state.clone());
-    let mut net = TestNetwork {
+    TestNetwork {
         _dir: dir,
         config,
         state,
         app,
         operator,
-        token: String::new(),
-    };
-    let operator = net.operator.clone();
-    net.token = net.sign_in(&operator).await.expect("operator signs in");
-    net
+    }
 }
 
 impl TestNetwork {
-    /// Sign in as `who` the way the NNM does; the session token, or the refusal status.
-    async fn sign_in(&self, who: &Identity) -> Result<String, StatusCode> {
-        self.sign_in_with(who, None).await
-    }
-
-    /// Sign in as `who`, presenting `membership` (a VMC naming `who`) if given.
-    async fn sign_in_with(
-        &self,
-        who: &Identity,
-        membership: Option<Value>,
-    ) -> Result<String, StatusCode> {
-        let (status, challenge) = self
-            .public(
-                "POST",
-                "/v1/auth/challenge",
-                Some(json!({ "did": who.did() })),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{challenge}");
-        let challenge: Challenge = serde_json::from_value(challenge).unwrap();
-        let document = who
-            .sign_document_for(
-                authentication_document(who.did(), &challenge),
-                AUTHENTICATION,
-            )
-            .await
-            .unwrap();
-        let (status, grant) = self
-            .public(
-                "POST",
-                "/v1/auth/session",
-                Some(json!({ "authentication": document, "membership": membership })),
-            )
-            .await;
-        if status != StatusCode::OK {
-            return Err(status);
-        }
-        Ok(grant["token"].as_str().unwrap().to_string())
-    }
-
     fn did(&self) -> String {
         self.state.network.did().to_string()
     }
 
-    async fn call(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<Value>,
-        admin: bool,
-    ) -> (StatusCode, Value) {
-        let mut req = Request::builder().method(method).uri(path);
-        if admin {
-            req = req.header(header::AUTHORIZATION, format!("Bearer {}", self.token));
-        }
-        let req = match body {
-            Some(b) => req
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(b.to_string())),
-            None => req.body(Body::empty()),
-        }
-        .unwrap();
-        let res = self.app.clone().oneshot(req).await.unwrap();
-        let status = res.status();
-        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        let value = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap()
-        };
-        (status, value)
-    }
-
-    async fn admin(&self, method: &str, path: &str, body: Option<Value>) -> Value {
-        let (status, value) = self.call(method, path, body, true).await;
-        assert!(status.is_success(), "{method} {path}: {status} {value}");
-        value
-    }
-
-    /// A request with `token` as the bearer (a member's or listed party's session).
-    async fn as_session(&self, token: &str, method: &str, path: &str) -> (StatusCode, Value) {
-        let req = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(header::AUTHORIZATION, format!("Bearer {token}"))
-            .body(Body::empty())
-            .unwrap();
+    /// A `GET`.
+    async fn get(&self, path: &str) -> (StatusCode, Value) {
+        let req = Request::builder().uri(path).body(Body::empty()).unwrap();
         let res = self.app.clone().oneshot(req).await.unwrap();
         let status = res.status();
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
@@ -182,14 +147,56 @@ impl TestNetwork {
         )
     }
 
-    async fn public(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
-        self.call(method, path, body, false).await
+    /// Post `doc` to the Trust Task endpoint, as it is.
+    async fn send(&self, doc: &Value) -> Answer {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/trust-tasks")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(doc.to_string()))
+            .unwrap();
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let answer: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            answer["proof"].is_object(),
+            "every answer is signed: {answer}"
+        );
+        if answer["type"] == format!("{}#response", doc["type"].as_str().unwrap()) {
+            assert_eq!(status, StatusCode::OK);
+            Answer::Ok(answer["payload"].clone())
+        } else {
+            Answer::Refused {
+                status,
+                code: answer["payload"]["code"].as_str().unwrap().to_string(),
+                details: answer["payload"]["details"].clone(),
+            }
+        }
+    }
+
+    /// Task `P` with `payload`, signed by `who` (unsigned with `None`).
+    async fn task<P: Payload + DeserializeOwned>(
+        &self,
+        who: Option<&Identity>,
+        payload: Value,
+    ) -> Answer {
+        let payload: P = serde_json::from_value(payload).expect("a valid payload");
+        let doc = match who {
+            Some(who) => sign_request(who, &self.did(), &payload).await.unwrap(),
+            None => request_document(None, &self.did(), &payload).unwrap(),
+        };
+        self.send(&doc).await
+    }
+
+    /// Task `P` as the operator, which must succeed.
+    async fn admin<P: Payload + DeserializeOwned>(&self, payload: Value) -> Value {
+        let operator = self.operator.clone();
+        self.task::<P>(Some(&operator), payload).await.ok()
     }
 
     async fn bit(&self, purpose: &str, index: u64) -> bool {
-        let (_, list) = self
-            .public("GET", &format!("/v1/status/{purpose}"), None)
-            .await;
+        let (_, list) = self.get(&format!("/v1/status/{purpose}")).await;
         let encoded = list["credentialSubject"]["encodedList"].as_str().unwrap();
         Bitstring::decode(encoded).unwrap().get(index as u32)
     }
@@ -201,10 +208,6 @@ fn status_index(credential: &Value) -> u64 {
         .unwrap()
         .parse()
         .unwrap()
-}
-
-fn entry_path(did: &str, suffix: &str) -> String {
-    format!("/v1/entries/{did}{suffix}")
 }
 
 #[tokio::test]
@@ -222,16 +225,16 @@ async fn world_health_network() {
         (&au, "network", "Health-AU"),
         (&msf.did().to_string(), "community", "MSF"),
     ] {
-        let entry = whn
-            .admin(
-                "POST",
-                "/v1/admin/entries",
-                Some(json!({ "did": did, "kind": kind, "label": label })),
-            )
+        let created = whn
+            .admin::<create::Payload>(json!({ "did": did, "kind": kind, "label": label }))
             .await;
-        assert_eq!(entry["state"], "listed");
+        assert_eq!(created["entry"]["state"], "listed");
+        assert!(
+            created["entry"]["createdAt"].is_string(),
+            "camelCase on the wire"
+        );
     }
-    let (_, index) = whn.public("GET", "/v1/index", None).await;
+    let (_, index) = whn.get("/v1/index").await;
     assert_eq!(index["network"], whn.did());
     assert!(index["proof"].is_object(), "index is signed");
     assert!(
@@ -242,26 +245,24 @@ async fn world_health_network() {
             .all(|e| e["acknowledged"] == false)
     );
 
-    // Listing twice is a conflict.
-    let (status, _) = whn
-        .call(
-            "POST",
-            "/v1/admin/entries",
-            Some(json!({ "did": au, "kind": "network" })),
-            true,
-        )
+    // Listing twice is refused.
+    let refused = whn
+        .task::<create::Payload>(Some(&whn.operator), json!({ "did": au, "kind": "network" }))
         .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(matches!(refused, Answer::Refused { .. }), "{refused:?}");
 
-    // --- Health-AU (a VTN) acknowledges: fetch the unsigned offer, sign the ack.
-    let (status, offer) = whn.public("GET", &entry_path(&au, "/offer"), None).await;
-    assert_eq!(status, StatusCode::OK);
+    // --- Health-AU (a VTN) acknowledges: ask for the unsigned offer, sign the ack.
+    let offered = whn
+        .task::<offer::Payload>(Some(&au_identity), json!({}))
+        .await
+        .ok();
+    let offer = offered["offer"].clone();
     assert!(
         offer.get("proof").is_none(),
         "no signed membership credential before consent"
     );
 
-    // Someone else's acknowledgement is refused.
+    // An acknowledgement that is not of this party's offer is refused.
     let imposter_offer = {
         let mut o = offer.clone();
         o["credentialSubject"]["id"] = json!(msf.did());
@@ -275,14 +276,11 @@ async fn world_health_network() {
     )
     .await
     .unwrap();
-    let (status, _) = whn
-        .public(
-            "POST",
-            &entry_path(&au, "/acknowledge"),
-            Some(json!({ "acknowledgement": forged })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let code = whn
+        .task::<acknowledge::Payload>(Some(&au_identity), json!({ "acknowledgement": forged }))
+        .await
+        .code();
+    assert_eq!(code, "vtn/membership/acknowledge:acknowledgementInvalid");
 
     let ack = member::acknowledge(
         &offer,
@@ -292,14 +290,11 @@ async fn world_health_network() {
     )
     .await
     .unwrap();
-    let (status, entry) = whn
-        .public(
-            "POST",
-            &entry_path(&au, "/acknowledge"),
-            Some(json!({ "acknowledgement": ack })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{entry}");
+    let acknowledged = whn
+        .task::<acknowledge::Payload>(Some(&au_identity), json!({ "acknowledgement": ack }))
+        .await
+        .ok();
+    let entry = &acknowledged["entry"];
     assert_eq!(entry["state"], "acknowledged");
     assert_eq!(entry["acknowledged"], true);
     assert_eq!(entry["kind"], "network");
@@ -310,34 +305,44 @@ async fn world_health_network() {
     );
     assert!(grant["credentialSubject"].get("digestMultibase").is_none());
 
+    // The same acknowledgement again is the same answer, not an error.
+    let again = whn
+        .task::<acknowledge::Payload>(Some(&au_identity), json!({ "acknowledgement": ack }))
+        .await
+        .ok();
+    assert_eq!(again["entry"]["grant"], grant);
+    // ...and the offer is gone.
+    let code = whn
+        .task::<offer::Payload>(Some(&au_identity), json!({}))
+        .await
+        .code();
+    assert_eq!(code, "vtn/membership/offer:alreadyMember");
+
     // The grant is fetchable by id and its status is clear.
     let grant_id = grant["id"].as_str().unwrap();
-    let (status, fetched) = whn
-        .public("GET", &format!("/v1/credentials/{grant_id}"), None)
-        .await;
+    let (status, fetched) = whn.get(&format!("/v1/credentials/{grant_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched, grant);
     assert!(!whn.bit("revocation", status_index(&grant)).await);
 
     // --- MSF repudiates its listing: still published, with the repudiation (VTI-VTN-012).
-    let (_, msf_entry) = whn.public("GET", &entry_path(msf.did(), ""), None).await;
+    let msf_entry = whn
+        .task::<entries_show::Payload>(None, json!({ "did": msf.did() }))
+        .await
+        .ok();
     let repudiation = member::repudiate(
-        &msf_entry["listing"],
+        &msf_entry["entry"]["listing"],
         &msf,
         Utc::now() - Duration::seconds(5),
     )
     .await
     .unwrap();
-    let (status, msf_entry) = whn
-        .public(
-            "POST",
-            &entry_path(msf.did(), "/repudiate"),
-            Some(json!({ "repudiation": repudiation })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{msf_entry}");
-    assert_eq!(msf_entry["state"], "repudiated");
-    let (_, index) = whn.public("GET", "/v1/index", None).await;
+    let repudiated = whn
+        .task::<repudiate::Payload>(Some(&msf), json!({ "repudiation": repudiation }))
+        .await
+        .ok();
+    assert_eq!(repudiated["entry"]["state"], "repudiated");
+    let (_, index) = whn.get("/v1/index").await;
     let published = index["entries"]
         .as_array()
         .unwrap()
@@ -346,28 +351,33 @@ async fn world_health_network() {
         .unwrap();
     assert!(published["repudiation"].is_object());
     // Nothing left to acknowledge.
-    let (status, _) = whn
-        .public("GET", &entry_path(msf.did(), "/offer"), None)
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    let code = whn
+        .task::<offer::Payload>(Some(&msf), json!({}))
+        .await
+        .code();
+    assert_eq!(code, "vtn/membership/offer:notListed");
 
     // --- Suspend and reinstate Health-AU: the suspension bit follows.
-    whn.admin(
-        "POST",
-        &format!("/v1/admin/entries/{au}/suspend"),
-        Some(json!({ "reason": "audit" })),
-    )
-    .await;
-    assert!(whn.bit("suspension", status_index(&grant)).await);
-    let (_, entry) = whn.public("GET", &entry_path(&au, ""), None).await;
-    assert_eq!(entry["acknowledged"], false, "suspended is not membership");
-    whn.admin("POST", &format!("/v1/admin/entries/{au}/reinstate"), None)
+    whn.admin::<suspend::Payload>(json!({ "did": au, "reason": "audit" }))
         .await;
+    assert!(whn.bit("suspension", status_index(&grant)).await);
+    // Suspending again changes nothing and is not an error.
+    let again = whn.admin::<suspend::Payload>(json!({ "did": au })).await;
+    assert_eq!(again["entry"]["state"], "suspended");
+    let shown = whn
+        .task::<entries_show::Payload>(None, json!({ "did": au }))
+        .await
+        .ok();
+    assert_eq!(
+        shown["entry"]["acknowledged"], false,
+        "suspended is not membership"
+    );
+    whn.admin::<reinstate::Payload>(json!({ "did": au })).await;
     assert!(!whn.bit("suspension", status_index(&grant)).await);
 
     // --- The graph: one edge per credential, both halves of the membership edge.
-    let (_, graph) = whn.public("GET", "/v1/graph", None).await;
-    let roles: Vec<&str> = graph["edges"]
+    let graph = whn.task::<graph_show::Payload>(None, json!({})).await.ok();
+    let roles: Vec<&str> = graph["graph"]["edges"]
         .as_array()
         .unwrap()
         .iter()
@@ -378,23 +388,28 @@ async fn world_health_network() {
     for role in ["listing", "grant", "acknowledgement"] {
         assert!(roles.contains(&role), "{role} in {roles:?}");
     }
+    // Including exited entries is for administrators.
+    let code = whn
+        .task::<graph_show::Payload>(None, json!({ "includeExited": true }))
+        .await
+        .code();
+    assert_eq!(code, "permissionDenied");
 
     // --- Health-AU departs by repudiating its grant: all WHN-issued credentials revoked.
     let departure = member::repudiate(&grant, &au_identity, Utc::now() - Duration::seconds(5))
         .await
         .unwrap();
-    let (status, entry) = whn
-        .public(
-            "POST",
-            &entry_path(&au, "/repudiate"),
-            Some(json!({ "repudiation": departure })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{entry}");
-    assert_eq!(entry["state"], "departed");
+    let departed = whn
+        .task::<repudiate::Payload>(Some(&au_identity), json!({ "repudiation": departure }))
+        .await
+        .ok();
+    assert_eq!(departed["entry"]["state"], "departed");
     assert!(whn.bit("revocation", status_index(&grant)).await);
-    assert!(whn.bit("revocation", status_index(&entry["listing"])).await);
-    let (_, index) = whn.public("GET", "/v1/index", None).await;
+    assert!(
+        whn.bit("revocation", status_index(&departed["entry"]["listing"]))
+            .await
+    );
+    let (_, index) = whn.get("/v1/index").await;
     assert!(
         index["entries"]
             .as_array()
@@ -404,129 +419,126 @@ async fn world_health_network() {
     );
 
     // --- Re-listing starts over.
-    let entry = whn
-        .admin(
-            "POST",
-            "/v1/admin/entries",
-            Some(json!({ "did": au, "kind": "network" })),
-        )
+    let relisted = whn
+        .admin::<create::Payload>(json!({ "did": au, "kind": "network" }))
         .await;
-    assert_eq!(entry["state"], "listed");
-    assert_eq!(entry["history"].as_array().unwrap().len(), 6);
+    assert_eq!(relisted["entry"]["state"], "listed");
+    assert_eq!(relisted["entry"]["history"].as_array().unwrap().len(), 6);
+    assert!(relisted["entry"]["history"][0]["changedAt"].is_string());
 
     // --- Audit trail records who did what.
-    let audit = whn.admin("GET", "/v1/admin/audit", None).await;
-    let actors: Vec<&str> = audit
+    let audit = whn
+        .admin::<specs::audit::list::v0_1::Payload>(json!({}))
+        .await;
+    let actors: Vec<&str> = audit["events"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| e["actor"].as_str().unwrap())
         .collect();
     assert!(actors.contains(&au.as_str()) && actors.contains(&whn.operator.did()));
-}
-
-#[tokio::test]
-async fn admin_routes_need_the_token() {
-    let whn = network("WHN").await;
-    let (status, _) = whn
-        .call(
-            "POST",
-            "/v1/admin/entries",
-            Some(json!({ "did": "did:key:z6Mkx", "kind": "community" })),
-            false,
-        )
+    let latest = whn
+        .admin::<specs::audit::list::v0_1::Payload>(json!({ "did": au, "limit": 1 }))
         .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = whn.call("GET", "/v1/admin/audit", None, false).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-
-    // The operator's session works, and says who it is.
-    let me = whn.admin("GET", "/v1/admin/whoami", None).await;
-    assert_eq!(me["did"], whn.operator.did());
+    assert_eq!(latest["events"].as_array().unwrap().len(), 1);
+    assert_eq!(latest["events"][0]["event"], "list");
 }
 
 #[tokio::test]
-async fn only_administrators_sign_in() {
+async fn administration_needs_an_administrators_signature() {
     let whn = network("WHN").await;
-    // A DID that proves control of itself but is not an administrator.
+    let payload = json!({ "did": "did:key:z6Mkx", "kind": "community" });
+
+    // Unsigned: the specification requires a proof.
+    let code = whn
+        .task::<create::Payload>(None, payload.clone())
+        .await
+        .code();
+    assert_eq!(code, "proofRequired");
+
+    // Signed by someone who is not an administrator.
     let stranger = Identity::generate();
-    assert_eq!(whn.sign_in(&stranger).await, Err(StatusCode::UNAUTHORIZED));
+    let (status, code, _) = whn
+        .task::<create::Payload>(Some(&stranger), payload.clone())
+        .await
+        .refusal();
+    assert_eq!(code, "permissionDenied");
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // A document for the operator's DID signed by someone else's key.
-    let (_, challenge) = whn
-        .public(
-            "POST",
-            "/v1/auth/challenge",
-            Some(json!({ "did": whn.operator.did() })),
-        )
-        .await;
-    let challenge: Challenge = serde_json::from_value(challenge).unwrap();
-    let forged = stranger
-        .sign_document_for(
-            authentication_document(whn.operator.did(), &challenge),
-            AUTHENTICATION,
-        )
+    // The operator.
+    whn.admin::<list::Payload>(json!({})).await;
+}
+
+#[tokio::test]
+async fn a_request_is_bound_to_its_signer_purpose_network_and_id() {
+    let whn = network("WHN").await;
+    let payload: list::Payload = serde_json::from_value(json!({})).unwrap();
+
+    // Claiming the operator as issuer, signed by someone else.
+    let stranger = Identity::generate();
+    let mut forged = request_document(Some(whn.operator.did()), &whn.did(), &payload).unwrap();
+    forged = stranger
+        .sign_document_for(forged, vti_vtn::verify::AUTHENTICATION)
         .await
         .unwrap();
-    let (status, _) = whn
-        .public(
-            "POST",
-            "/v1/auth/session",
-            Some(json!({ "authentication": forged })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let code = whn.send(&forged).await.code();
+    assert!(
+        code == "proofInvalid" || code == "permissionDenied",
+        "{code}"
+    );
 
-    // A genuine document signed for the wrong purpose (an assertion, not authentication).
-    let (_, challenge) = whn
-        .public(
-            "POST",
-            "/v1/auth/challenge",
-            Some(json!({ "did": whn.operator.did() })),
-        )
-        .await;
-    let challenge: Challenge = serde_json::from_value(challenge).unwrap();
+    // The operator's own key, but made for assertion, not authentication.
     let wrong_purpose = whn
         .operator
-        .sign_document(authentication_document(whn.operator.did(), &challenge))
+        .sign_document(request_document(Some(whn.operator.did()), &whn.did(), &payload).unwrap())
         .await
         .unwrap();
-    let (status, _) = whn
-        .public(
-            "POST",
-            "/v1/auth/session",
-            Some(json!({ "authentication": wrong_purpose })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let code = whn.send(&wrong_purpose).await.code();
+    assert!(
+        code == "proofInvalid" || code == "permissionDenied",
+        "{code}"
+    );
 
-    // A challenge is single use.
-    let (_, challenge) = whn
-        .public(
-            "POST",
-            "/v1/auth/challenge",
-            Some(json!({ "did": whn.operator.did() })),
-        )
-        .await;
-    let challenge: Challenge = serde_json::from_value(challenge).unwrap();
-    let document = whn
-        .operator
-        .sign_document_for(
-            authentication_document(whn.operator.did(), &challenge),
-            AUTHENTICATION,
-        )
+    // Addressed to another network.
+    let elsewhere = sign_request(&whn.operator, "did:key:z6MkOther", &payload)
         .await
         .unwrap();
-    for expected in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
-        let (status, _) = whn
-            .public(
-                "POST",
-                "/v1/auth/session",
-                Some(json!({ "authentication": document })),
-            )
-            .await;
-        assert_eq!(status, expected);
-    }
+    assert_eq!(whn.send(&elsewhere).await.code(), "wrongRecipient");
+
+    // Too old: outside the acceptance window.
+    let mut stale = request_document(Some(whn.operator.did()), &whn.did(), &payload).unwrap();
+    stale["issuedAt"] = json!((Utc::now() - Duration::minutes(30)).to_rfc3339());
+    let stale = whn
+        .operator
+        .sign_document_for(stale, vti_vtn::verify::AUTHENTICATION)
+        .await
+        .unwrap();
+    assert!(matches!(whn.send(&stale).await, Answer::Refused { .. }));
+
+    // A document is executed once: the same one again is answered, not re-run.
+    let listed = sign_request(
+        &whn.operator,
+        &whn.did(),
+        &serde_json::from_value::<create::Payload>(
+            json!({ "did": "did:key:z6MkOnce", "kind": "community" }),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let first = whn.send(&listed).await.ok();
+    let second = whn.send(&listed).await.ok();
+    assert_eq!(first, second);
+    // A different document under the same id is a conflict.
+    let mut other = listed.clone();
+    other.as_object_mut().unwrap().remove("proof");
+    other["payload"]["did"] = json!("did:key:z6MkTwice");
+    let other = whn
+        .operator
+        .sign_document_for(other, vti_vtn::verify::AUTHENTICATION)
+        .await
+        .unwrap();
+    assert_eq!(whn.send(&other).await.code(), "idConflict");
 }
 
 /// The provisioned path without a live VTA: keys in the `[secrets]` store as `vtn setup`
@@ -591,58 +603,53 @@ async fn provisioned_identity_loads_from_the_secret_store() {
 async fn network_removal_revokes_what_it_issued() {
     let whn = network("WHN").await;
     let vtc = Identity::generate();
-    let entry = whn
-        .admin(
-            "POST",
-            "/v1/admin/entries",
-            Some(json!({ "did": vtc.did(), "kind": "community" })),
-        )
+    let created = whn
+        .admin::<create::Payload>(json!({ "did": vtc.did(), "kind": "community" }))
         .await;
-    let listing_index = status_index(&entry["listing"]["credential"]);
-    let entry = whn
-        .admin(
-            "POST",
-            &format!("/v1/admin/entries/{}/remove", vtc.did()),
-            Some(json!({ "reason": "criteria" })),
-        )
+    let listing_index = status_index(&created["entry"]["listing"]["credential"]);
+    let removed = whn
+        .admin::<remove::Payload>(json!({ "did": vtc.did(), "reason": "criteria" }))
         .await;
-    assert_eq!(entry["state"], "removed");
+    assert_eq!(removed["entry"]["state"], "removed");
     assert!(whn.bit("revocation", listing_index).await);
-    let (status, _) = whn.public("GET", &entry_path(vtc.did(), ""), None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Removed is unpublished: answered as if absent.
+    let shown = whn
+        .task::<entries_show::Payload>(None, json!({ "did": vtc.did() }))
+        .await;
+    assert!(matches!(shown, Answer::Refused { .. }), "{shown:?}");
+    // Removing again is not an error; reinstating a removed entry is.
+    whn.admin::<remove::Payload>(json!({ "did": vtc.did() }))
+        .await;
+    let code = whn
+        .task::<reinstate::Payload>(Some(&whn.operator), json!({ "did": vtc.did() }))
+        .await
+        .code();
+    assert_eq!(code, "vtn/listings/reinstate:invalidTransition");
 }
 
-/// List `party` and have it acknowledge, signing in as itself first when the network is
-/// restricted (a listed party fetches its own offer only when signed in).
+/// List `party` and have it acknowledge. It asks for its offer as itself, whatever the
+/// directory's visibility.
 async fn join(net: &TestNetwork, party: &Identity, kind: &str, label: &str, extra: Value) {
     let mut body = json!({ "did": party.did(), "kind": kind, "label": label });
     body.as_object_mut()
         .unwrap()
         .extend(extra.as_object().cloned().unwrap_or_default());
-    net.admin("POST", "/v1/admin/entries", Some(body)).await;
-    let offer = if net.config.directory.visibility == Visibility::Public {
-        net.public("GET", &entry_path(party.did(), "/offer"), None)
-            .await
-            .1
-    } else {
-        let token = net.sign_in(party).await.expect("a listed party signs in");
-        let (status, offer) = net
-            .as_session(&token, "GET", &entry_path(party.did(), "/offer"))
-            .await;
-        assert_eq!(status, StatusCode::OK, "{offer}");
-        offer
-    };
-    let ack = member::acknowledge(&offer, party, Utc::now() - Duration::seconds(5), None)
+    net.admin::<create::Payload>(body).await;
+    let offered = net
+        .task::<offer::Payload>(Some(party), json!({}))
         .await
-        .unwrap();
-    let (status, entry) = net
-        .public(
-            "POST",
-            &entry_path(party.did(), "/acknowledge"),
-            Some(json!({ "acknowledgement": ack })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{entry}");
+        .ok();
+    let ack = member::acknowledge(
+        &offered["offer"],
+        party,
+        Utc::now() - Duration::seconds(5),
+        None,
+    )
+    .await
+    .unwrap();
+    net.task::<acknowledge::Payload>(Some(party), json!({ "acknowledgement": ack }))
+        .await
+        .ok();
 }
 
 /// A community's membership credential (the grant) for `person`, signed by the community.
@@ -659,6 +666,10 @@ async fn community_vmc(community: &Identity, person: &Identity) -> Value {
     serde_json::to_value(vmc).unwrap()
 }
 
+fn entries(answer: Value) -> Vec<Value> {
+    answer["entries"].as_array().unwrap().clone()
+}
+
 #[tokio::test]
 async fn public_directory_is_searchable() {
     let whn = network("WHN").await;
@@ -672,199 +683,206 @@ async fn public_directory_is_searchable() {
     )
     .await;
     let nz = Identity::generate();
-    whn.admin(
-        "POST",
-        "/v1/admin/entries",
-        Some(json!({ "did": nz.did(), "kind": "network", "label": "Health-NZ", "tags": ["new zealand"] })),
-    )
+    whn.admin::<create::Payload>(json!({
+        "did": nz.did(), "kind": "network", "label": "Health-NZ",
+        "url": "https://health-nz.example", "tags": ["new zealand"],
+    }))
     .await;
 
-    let (status, rows) = whn.public("GET", "/v1/directory", None).await;
-    assert_eq!(status, StatusCode::OK);
-    let rows = rows.as_array().unwrap();
+    let rows = entries(whn.task::<search::Payload>(None, json!({})).await.ok());
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["acknowledged"], true, "members first");
     assert_eq!(rows[1]["state"], "listed");
 
-    let (_, hits) = whn
-        .public("GET", "/v1/directory?q=emergency%20NGO", None)
-        .await;
-    assert_eq!(hits.as_array().unwrap().len(), 1);
-    let (_, hits) = whn
-        .public("GET", "/v1/directory?kind=network&members_only=true", None)
-        .await;
-    assert!(
-        hits.as_array().unwrap().is_empty(),
-        "Health-NZ has not acknowledged"
+    let hits = entries(
+        whn.task::<search::Payload>(None, json!({ "q": "emergency NGO" }))
+            .await
+            .ok(),
     );
+    assert_eq!(hits.len(), 1);
+    let hits = entries(
+        whn.task::<search::Payload>(None, json!({ "kind": "network", "membersOnly": true }))
+            .await
+            .ok(),
+    );
+    assert!(hits.is_empty(), "Health-NZ has not acknowledged");
 
-    let (_, summary) = whn.public("GET", "/v1/directory/summary", None).await;
-    assert_eq!(summary["acknowledged"], 1);
-    assert_eq!(summary["unacknowledged"], 1);
+    let counts = whn.task::<summary::Payload>(None, json!({})).await.ok();
+    assert_eq!(counts["summary"]["acknowledged"], 1);
+    assert_eq!(counts["summary"]["unacknowledged"], 1);
 
-    // The admin edits a profile; search sees it, nothing is re-issued.
-    let entry = whn
-        .admin(
-            "POST",
-            &format!("/v1/admin/entries/{}/profile", nz.did()),
-            Some(json!({ "description": "Te Whatu Ora", "tags": ["aotearoa"] })),
-        )
+    // The admin edits part of a profile: what is named changes, the rest stays, nothing is
+    // re-issued.
+    let updated = whn
+        .admin::<update::Payload>(json!({ "did": nz.did(), "description": "Te Whatu Ora" }))
         .await;
+    let entry = &updated["entry"];
     assert_eq!(entry["state"], "listed");
-    let (_, hits) = whn.public("GET", "/v1/directory?q=aotearoa", None).await;
-    assert_eq!(hits.as_array().unwrap().len(), 1);
+    assert_eq!(entry["label"], "Health-NZ");
+    assert_eq!(entry["profile"]["url"], "https://health-nz.example");
+    assert_eq!(entry["profile"]["tags"], json!(["new zealand"]));
+    let hits = entries(
+        whn.task::<search::Payload>(None, json!({ "q": "whatu" }))
+            .await
+            .ok(),
+    );
+    assert_eq!(hits.len(), 1);
+    // An empty value clears.
+    let cleared = whn
+        .admin::<update::Payload>(json!({ "did": nz.did(), "url": "" }))
+        .await;
+    assert!(cleared["entry"]["profile"].get("url").is_none());
 }
 
 #[tokio::test]
 async fn members_only_directory() {
-    let whn = network_with("WHN", Visibility::Members).await;
+    let whn = network_with("WHN", Visibility::Members, true).await;
     let msf = Identity::generate();
     join(&whn, &msf, "community", "MSF", json!({})).await;
     let pending = Identity::generate();
-    whn.admin(
-        "POST",
-        "/v1/admin/entries",
-        Some(json!({ "did": pending.did(), "kind": "community", "label": "Pending" })),
+    whn.admin::<create::Payload>(
+        json!({ "did": pending.did(), "kind": "community", "label": "Pending" }),
     )
     .await;
 
     // Anonymous: no set, but the profile, the page, status lists and counts are public.
-    for path in ["/v1/directory", "/v1/index", "/v1/graph"] {
-        assert_eq!(
-            whn.public("GET", path, None).await.0,
-            StatusCode::UNAUTHORIZED,
-            "{path}"
-        );
-    }
     assert_eq!(
-        whn.public("GET", &entry_path(msf.did(), ""), None).await.0,
-        StatusCode::UNAUTHORIZED
+        whn.task::<search::Payload>(None, json!({})).await.code(),
+        "permissionDenied"
     );
-    // Probing for a listing reveals nothing.
     assert_eq!(
-        whn.public("GET", &entry_path(pending.did(), "/offer"), None)
+        whn.task::<graph_show::Payload>(None, json!({}))
             .await
-            .0,
-        StatusCode::UNAUTHORIZED
+            .code(),
+        "permissionDenied"
     );
-    let (_, info) = whn.public("GET", "/.well-known/vtn", None).await;
+    assert_eq!(
+        whn.task::<entries_show::Payload>(None, json!({ "did": msf.did() }))
+            .await
+            .code(),
+        "permissionDenied"
+    );
+    // The index and credentials are unsigned fetches, so a restricted network does not serve
+    // them (A21).
+    assert_eq!(whn.get("/v1/index").await.0, StatusCode::FORBIDDEN);
+    let (_, info) = whn.get("/.well-known/vtn").await;
     assert_eq!(info["directory"]["visibility"], "members");
-    assert_eq!(
-        whn.public("GET", "/v1/directory/summary", None).await.0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        whn.public("GET", "/v1/status/revocation", None).await.0,
-        StatusCode::OK
-    );
+    whn.task::<summary::Payload>(None, json!({})).await.ok();
+    assert_eq!(whn.get("/v1/status/revocation").await.0, StatusCode::OK);
 
-    // A member community, signed in as itself.
-    let token = whn.sign_in(&msf).await.unwrap();
-    let (status, rows) = whn.as_session(&token, "GET", "/v1/directory").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(rows.as_array().unwrap().len(), 2);
-    let (_, me) = whn.as_session(&token, "GET", "/v1/auth/session").await;
-    assert_eq!(me["role"]["role"], "memberEntity");
+    // A member community, as itself.
+    let rows = entries(
+        whn.task::<search::Payload>(Some(&msf), json!({}))
+            .await
+            .ok(),
+    );
+    assert_eq!(rows.len(), 2);
 
-    // A person holding MSF's membership credential.
+    // A person presenting MSF's membership credential.
     let person = Identity::generate();
     let vmc = community_vmc(&msf, &person).await;
-    let token = whn.sign_in_with(&person, Some(vmc.clone())).await.unwrap();
-    let (status, _) = whn.as_session(&token, "GET", "/v1/directory").await;
-    assert_eq!(status, StatusCode::OK);
-    let (_, me) = whn.as_session(&token, "GET", "/v1/auth/session").await;
-    assert_eq!(me["role"]["community"], msf.did());
+    whn.task::<search::Payload>(Some(&person), json!({ "membership": vmc }))
+        .await
+        .ok();
+    // ...but not without it.
+    assert_eq!(
+        whn.task::<search::Payload>(Some(&person), json!({}))
+            .await
+            .code(),
+        "permissionDenied"
+    );
 
     // Someone else presenting that person's credential.
     let thief = Identity::generate();
     assert_eq!(
-        whn.sign_in_with(&thief, Some(vmc)).await,
-        Err(StatusCode::UNAUTHORIZED)
+        whn.task::<search::Payload>(Some(&thief), json!({ "membership": vmc }))
+            .await
+            .code(),
+        "permissionDenied"
     );
     // A credential from a community that is listed but has not acknowledged.
     let pending_member = Identity::generate();
     let vmc = community_vmc(&pending, &pending_member).await;
     assert_eq!(
-        whn.sign_in_with(&pending_member, Some(vmc)).await,
-        Err(StatusCode::UNAUTHORIZED)
+        whn.task::<search::Payload>(Some(&pending_member), json!({ "membership": vmc }))
+            .await
+            .code(),
+        "permissionDenied"
     );
 
     // A listed, unacknowledged party gets its own offer and entry, not the directory.
-    let token = whn.sign_in(&pending).await.unwrap();
     assert_eq!(
-        whn.as_session(&token, "GET", "/v1/directory").await.0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        whn.as_session(&token, "GET", &entry_path(pending.did(), "/offer"))
+        whn.task::<search::Payload>(Some(&pending), json!({}))
             .await
-            .0,
-        StatusCode::OK
+            .code(),
+        "permissionDenied"
     );
+    whn.task::<offer::Payload>(Some(&pending), json!({}))
+        .await
+        .ok();
+    whn.task::<entries_show::Payload>(Some(&pending), json!({ "did": pending.did() }))
+        .await
+        .ok();
+    // ...and no administration.
     assert_eq!(
-        whn.as_session(&token, "GET", &entry_path(msf.did(), "/offer"))
+        whn.task::<list::Payload>(Some(&pending), json!({}))
             .await
-            .0,
-        StatusCode::UNAUTHORIZED
-    );
-    // ...and no admin route.
-    assert_eq!(
-        whn.as_session(&token, "GET", "/v1/admin/entries").await.0,
-        StatusCode::FORBIDDEN
+            .code(),
+        "permissionDenied"
     );
 
-    // A stranger cannot sign in at all.
+    // A stranger asking for an offer learns only that it is not listed.
     assert_eq!(
-        whn.sign_in(&Identity::generate()).await,
-        Err(StatusCode::UNAUTHORIZED)
+        whn.task::<offer::Payload>(Some(&Identity::generate()), json!({}))
+            .await
+            .code(),
+        "vtn/membership/offer:notListed"
     );
 }
 
 #[tokio::test]
 async fn admins_only_directory_and_hidden_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let operator = Identity::generate();
-    let mut config = test_config(dir.path(), "WHN", vec![operator.did().to_string()]);
-    config.directory.visibility = Visibility::Admins;
-    config.directory.show_counts = false;
-    vtn_service::init_dev(&config).unwrap();
-    let state = vtn_service::build_state_with(&config, Arc::new(VtaKeyResolver::offline()))
-        .await
-        .unwrap();
-    let app = router(state.clone());
-    let mut whn = TestNetwork {
-        _dir: dir,
-        config,
-        state,
-        app,
-        operator: operator.clone(),
-        token: String::new(),
-    };
-    whn.token = whn.sign_in(&operator).await.unwrap();
+    let whn = network_with("WHN", Visibility::Admins, false).await;
     let msf = Identity::generate();
     join(&whn, &msf, "community", "MSF", json!({})).await;
 
-    let token = whn.sign_in(&msf).await.unwrap();
     assert_eq!(
-        whn.as_session(&token, "GET", "/v1/directory").await.0,
-        StatusCode::FORBIDDEN,
+        whn.task::<search::Payload>(Some(&msf), json!({}))
+            .await
+            .code(),
+        "permissionDenied",
         "members do not see an admins-only directory"
     );
     assert_eq!(
-        whn.public("GET", "/v1/directory/summary", None).await.0,
-        StatusCode::UNAUTHORIZED,
+        whn.task::<summary::Payload>(None, json!({})).await.code(),
+        "permissionDenied",
         "counts hidden"
     );
     // A member still reads its own entry.
-    assert_eq!(
-        whn.as_session(&token, "GET", &entry_path(msf.did(), ""))
-            .await
-            .0,
-        StatusCode::OK
-    );
-    let (status, rows) = whn.call("GET", "/v1/directory", None, true).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(rows.as_array().unwrap().len(), 1);
+    whn.task::<entries_show::Payload>(Some(&msf), json!({ "did": msf.did() }))
+        .await
+        .ok();
+    let rows = entries(whn.admin::<search::Payload>(json!({})).await);
+    assert_eq!(rows.len(), 1);
+    let shown = whn
+        .admin::<show::Payload>(json!({ "did": msf.did() }))
+        .await;
+    assert_eq!(shown["entry"]["state"], "acknowledged");
+}
+
+#[tokio::test]
+async fn an_unknown_task_is_refused_by_type() {
+    let whn = network("WHN").await;
+    let mut doc = request_document(
+        None,
+        &whn.did(),
+        &serde_json::from_value::<search::Payload>(json!({})).unwrap(),
+    )
+    .unwrap();
+    doc["type"] = json!("https://trusttasks.org/spec/vtn/directory/search/9.9");
+    assert_eq!(whn.send(&doc).await.code(), "unsupportedVersion");
+    doc["type"] = json!("https://trusttasks.org/spec/vtn/nothing/here/0.1");
+    assert_eq!(whn.send(&doc).await.code(), "unsupportedType");
 }
 
 #[tokio::test]
@@ -889,5 +907,32 @@ async fn landing_page_is_served_with_a_strict_policy() {
             .to_vec(),
     )
     .unwrap();
-    assert!(html.contains("/v1/directory"));
+    assert!(html.contains("/v1/trust-tasks") && html.contains("vtn/directory/search"));
+}
+
+#[tokio::test]
+async fn every_task_is_served() {
+    // Every `vtn/*` request type the pinned specifications define has a handler: an unrouted
+    // one would answer `unsupportedType`.
+    let whn = network("WHN").await;
+    let requests: Vec<&str> = vti_specs_vtn::schema_index::INDEX
+        .iter()
+        .map(|e| e.type_uri)
+        .filter(|uri| !uri.contains('#'))
+        .collect();
+    assert_eq!(requests.len(), 33, "{requests:?}");
+    let template = request_document(
+        None,
+        &whn.did(),
+        &serde_json::from_value::<search::Payload>(json!({})).unwrap(),
+    )
+    .unwrap();
+    for uri in requests {
+        let mut doc = template.clone();
+        doc["id"] = json!(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+        doc["type"] = json!(uri);
+        if let Answer::Refused { code, .. } = whn.send(&doc).await {
+            assert!(!code.starts_with("unsupported"), "{uri}: {code}");
+        }
+    }
 }

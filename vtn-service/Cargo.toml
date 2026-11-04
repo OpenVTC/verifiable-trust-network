@@ -16,6 +16,10 @@ path = "src/main.rs"
 
 [dependencies]
 vti-vtn = { workspace = true }
+vti-trust-task-server = { workspace = true }
+vti-specs-vtn = { workspace = true }
+trust-tasks-rs = { workspace = true }
+async-trait = { workspace = true }
 reqwest = { workspace = true }
 vti-common = { workspace = true }
 vti-secrets = { workspace = true }

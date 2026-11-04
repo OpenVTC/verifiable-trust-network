@@ -82,7 +82,6 @@
   details button { margin-top: 8px; }
   .btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
     font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
-  .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; }
   footer { margin-top: 40px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
   .empty { text-align: center; color: var(--muted); padding: 30px 0; }
   .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
@@ -121,7 +120,6 @@
   </header>
 
   <section class="stats" id="stats" aria-label="Network size"></section>
-  <p class="session hidden" id="session"></p>
 
   <div class="tabs hidden" role="tablist" id="tabs">
     <button type="button" role="tab" aria-selected="true" data-tab="directory">Directory</button>
@@ -167,43 +165,47 @@
   <section id="restricted" class="notice hidden">
     <h2 id="restricted-title">Members-only directory</h2>
     <p id="restricted-text"></p>
-    <button class="btn" type="button" id="wallet-sign-in">Sign in with a wallet</button>
-    <div id="sign-in-panel" class="hidden">
-      <p>Open this link in your wallet, or sign it with the NNM (<code>nnm login '&lt;link&gt;'</code>). This page continues once it is signed.</p>
-      <p><a id="sign-in-link" href="#">Open in wallet</a> <button class="copy" type="button" id="copy-link">Copy link</button></p>
-      <p class="did" id="sign-in-uri"></p>
-      <p id="sign-in-status" aria-live="polite">Waiting for a signature…</p>
-    </div>
-    <details>
-      <summary>Have a session token? Use it instead.</summary>
-      <input id="token" type="password" placeholder="Session token" autocomplete="off" aria-label="Session token">
-      <button class="btn" id="use-token" type="button">Open the directory</button>
-    </details>
+    <p>Signing in from this page, with a wallet approving it, is on its way. Until then, members and administrators search this directory with their own tools (<code>nnm directory</code>).</p>
   </section>
 
   <footer>
     <span>Listing is one-sided. Only <b>members</b> have acknowledged their entry (VTI-VTN-011, 013).</span>
     <a href="/v1/index">Signed index</a>
-    <a href="/v1/graph">DTG graph</a>
     <a href="/.well-known/vtn">Network profile</a>
   </footer>
 </main>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const TOKEN_KEY = "vtn-session";
   const state = { rows: [], q: "", member: "all", kind: "all", federated: false, own: [] };
+  let NETWORK = null;
 
-  function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } }
-  function setToken(t) { try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {} }
-
-  async function get(path, auth) {
-    const headers = { Accept: "application/json" };
-    const t = auth && token();
-    if (t) headers.Authorization = "Bearer " + t;
-    const res = await fetch(path, { headers });
+  async function get(path) {
+    const res = await fetch(path, { headers: { Accept: "application/json" } });
     const body = await res.json().catch(() => null);
     return { status: res.status, body };
+  }
+
+  // A `vtn/*` read, as an unsigned Trust Task (docs/trust-tasks.md): the network answers it
+  // when its directory is public. `ok` and the response payload, or the refusal.
+  async function task(slug, payload = {}) {
+    const doc = {
+      id: "urn:uuid:" + crypto.randomUUID(),
+      type: `https://trusttasks.org/spec/${slug}/0.1`,
+      recipient: NETWORK,
+      issuedAt: new Date().toISOString(),
+      payload,
+    };
+    const res = await fetch("/v1/trust-tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(doc),
+    });
+    const body = await res.json().catch(() => null);
+    if (body && typeof body.type === "string" && body.type === doc.type + "#response") {
+      return { ok: true, status: res.status, payload: body.payload };
+    }
+    return { ok: false, status: res.status, error: body && body.payload };
   }
 
   function el(tag, attrs = {}, ...children) {
@@ -294,7 +296,7 @@
     }));
   }
 
-  function showRestricted(visibility, signedIn) {
+  function showRestricted(visibility) {
     $("directory").classList.add("hidden");
     $("restricted").classList.remove("hidden");
     if (visibility === "admins") {
@@ -302,48 +304,33 @@
       $("restricted-text").textContent = "This network's directory is visible to its administrators only.";
     } else {
       $("restricted-title").textContent = "Members-only directory";
-      $("restricted-text").textContent = signedIn
-        ? "Your session does not give access to this directory."
-        : "This network's directory is visible to its members: a member community or network signed in as itself, or a person presenting a membership credential from a member community.";
+      $("restricted-text").textContent = "This network's directory is visible to its members: a member community or network, or a person presenting a membership credential from a member community.";
     }
   }
 
   async function loadFederated() {
-    const res = await get("/v1/directory/federated", true);
+    const res = await task("vtn/directory/federated");
     const warn = $("unreachable");
-    if (res.status !== 200 || !res.body) { warn.textContent = "Member networks could not be searched."; warn.classList.remove("hidden"); return; }
-    state.rows = res.body.results.map((r) => Object.assign({}, r, { path: r.path }));
-    const n = res.body.unreachable.length;
+    if (!res.ok) { warn.textContent = "Member networks could not be searched."; warn.classList.remove("hidden"); return; }
+    state.rows = res.payload.results.map((r) => Object.assign({}, r, { path: r.path }));
+    const n = res.payload.unreachable.length;
     warn.textContent = n ? `${n} member network${n === 1 ? "" : "s"} could not be searched (restricted or unreachable); their entries are not shown.` : "";
     warn.classList.toggle("hidden", !n);
     renderList();
   }
 
   async function loadDirectory(visibility) {
-    const res = await get("/v1/directory", true);
-    if (res.status === 200 && Array.isArray(res.body)) {
-      state.rows = res.body;
-      state.own = res.body;
+    const res = await task("vtn/directory/search");
+    if (res.ok) {
+      state.rows = res.payload.entries;
+      state.own = res.payload.entries;
       $("restricted").classList.add("hidden");
       $("directory").classList.remove("hidden");
       $("tabs").classList.remove("hidden");
       renderList();
       return;
     }
-    if (res.status === 401 && token()) setToken(null);
-    showRestricted(visibility, res.status === 403);
-  }
-
-  async function loadSession() {
-    if (!token()) return;
-    const res = await get("/v1/auth/session", true);
-    const box = $("session");
-    if (res.status !== 200) { setToken(null); return; }
-    box.replaceChildren("Signed in as ", el("span", { class: "did" }, res.body.did), " ");
-    const out = el("button", { class: "copy", type: "button" }, "Sign out");
-    out.addEventListener("click", () => { setToken(null); location.reload(); });
-    box.append(out);
-    box.classList.remove("hidden");
+    showRestricted(visibility);
   }
 
 
@@ -416,9 +403,9 @@
       const b = el("button", { class: "btn", type: "button" }, "Expand this network");
       b.addEventListener("click", async () => {
         b.disabled = true; b.textContent = "Loading\u2026";
-        const res = await get("/v1/graph/member/" + encodeURIComponent(node.id), true);
-        if (res.status === 200) { graphState.expanded[node.id] = res.body; renderGraph(); showDetail(node, owner, graph, false); }
-        else { b.textContent = "Could not load: " + (res.body?.message || res.status); }
+        const res = await task("vtn/graph/member", { did: node.id });
+        if (res.ok) { graphState.expanded[node.id] = res.payload.graph; renderGraph(); showDetail(node, owner, graph, false); }
+        else { b.textContent = "Could not load: " + (res.error?.message || res.status); }
       });
       box.append(el("p", {}, b));
     }
@@ -468,8 +455,8 @@
     if (!root) return;
     const targets = root.nodes.filter((n) => !n.root && n.kind === "network" && n.state === "acknowledged" && n.url && !graphState.expanded[n.id]);
     for (const n of targets) {
-      const res = await get("/v1/graph/member/" + encodeURIComponent(n.id), true);
-      if (res.status === 200) graphState.expanded[n.id] = res.body;
+      const res = await task("vtn/graph/member", { did: n.id });
+      if (res.ok) graphState.expanded[n.id] = res.payload.graph;
     }
     renderGraph();
   }
@@ -477,9 +464,9 @@
 
   async function loadGraph() {
     if (graphState.loaded) return renderGraph();
-    const res = await get("/v1/graph", true);
-    if (res.status !== 200) { $("graph-detail").textContent = "The graph is not visible to you."; return; }
-    graphState.root = res.body;
+    const res = await task("vtn/graph/show");
+    if (!res.ok) { $("graph-detail").textContent = "The graph is not visible to you."; return; }
+    graphState.root = res.payload.graph;
     graphState.loaded = true;
     renderGraph();
   }
@@ -507,12 +494,12 @@
       const href = fw.iri && safeHref(fw.iri);
       if (href) fwLink.href = href; else fwLink.removeAttribute("href");
       $("did").textContent = info.did || "—";
+      NETWORK = info.did || null;
     }
     const visibility = info?.directory?.visibility || "public";
     if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
-    await loadSession();
-    const summary = await get("/v1/directory/summary", true);
-    renderStats(summary.status === 200 ? summary.body : null);
+    const summary = await task("vtn/directory/summary");
+    renderStats(summary.ok ? summary.payload.summary : null);
     await loadDirectory(visibility);
     if (location.hash.startsWith("#graph")) {
       document.querySelector('[data-tab="graph"]').click();
@@ -532,34 +519,6 @@
   });
   bindSeg("state", "member");
   bindSeg("kind", "kind");
-  let pollTimer;
-  $("wallet-sign-in").addEventListener("click", async () => {
-    const res = await fetch("/v1/auth/login", { method: "POST", headers: { Accept: "application/json" } });
-    if (!res.ok) { $("sign-in-status").textContent = "Could not start a sign-in."; return; }
-    const start = await res.json();
-    const uri = "vtn-signin:?network=" + encodeURIComponent(start.audience) +
-      "&endpoint=" + encodeURIComponent(location.origin) + "&challenge=" + encodeURIComponent(start.challenge);
-    $("sign-in-link").href = uri;
-    $("sign-in-uri").textContent = uri;
-    $("sign-in-panel").classList.remove("hidden");
-    $("wallet-sign-in").classList.add("hidden");
-    const deadline = Date.parse(start.expiresAt);
-    clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      if (Date.now() > deadline) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in expired. Start again."; $("wallet-sign-in").classList.remove("hidden"); return; }
-      const poll = await fetch(`/v1/auth/login/${encodeURIComponent(start.login)}?secret=${encodeURIComponent(start.pollSecret)}`);
-      if (!poll.ok) { clearInterval(pollTimer); $("sign-in-status").textContent = "The sign-in was not accepted."; return; }
-      const body = await poll.json();
-      if (body.status === "complete") { clearInterval(pollTimer); setToken(body.session.token); location.reload(); }
-    }, 2000);
-  });
-  $("copy-link").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText($("sign-in-uri").textContent); $("copy-link").textContent = "Copied"; } catch {}
-  });
-  $("use-token").addEventListener("click", () => {
-    const t = $("token").value.trim();
-    if (t) { setToken(t); location.reload(); }
-  });
   document.querySelectorAll("[data-copy-from]").forEach((b) => b.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($(b.dataset.copyFrom).textContent); b.textContent = "Copied"; }
     catch { b.textContent = "Copy failed"; }

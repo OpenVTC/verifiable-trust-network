@@ -12,8 +12,8 @@ use crate::error::{ApiError, ApiResult};
 use crate::network::Network;
 
 impl Network {
-    /// A listed party or member registers one of its groups for a role. Authenticated by the
-    /// member's signature on the `servesRole` VSC.
+    /// A listed party or member registers one of its groups for a role. `registration` is the
+    /// member's signed `vtn/groups/register` request, which the acceptance binds by digest.
     pub async fn register_group(
         &self,
         member: &str,
@@ -21,11 +21,10 @@ impl Network {
     ) -> ApiResult<RegisteredGroup> {
         let entry = self.entry(member).await?;
         if !matches!(entry.state, EntryState::Listed | EntryState::Acknowledged) {
-            return Err(VtnError::InvalidTransition {
-                from: entry.state,
-                event: "register-group",
-            }
-            .into());
+            return Err(ApiError::coded(
+                "notListed",
+                format!("a {:?} party cannot register groups", entry.state),
+            ));
         }
         let reg = groups::verify_registration(
             &registration,
@@ -36,13 +35,26 @@ impl Network {
         )
         .await?;
         if self.role(&reg.role).is_none() {
-            return Err(ApiError::Vtn(VtnError::Rejected(format!(
-                "this network defines no role {:?}",
-                reg.role
-            ))));
+            return Err(ApiError::coded(
+                "unknownRole",
+                format!("this network defines no role {:?}", reg.role),
+            ));
         }
 
         let _guard = self.write.lock().await;
+        // One group serves one member: another member's group is not this member's to claim.
+        if let Some(other) = self
+            .store
+            .groups()
+            .await?
+            .into_iter()
+            .find(|g| g.group == reg.group && g.member != member)
+        {
+            return Err(ApiError::coded(
+                "groupTaken",
+                format!("{} is registered here by {}", reg.group, other.member),
+            ));
+        }
         if let Some(old) = self.store.group(member, &reg.role).await? {
             self.store
                 .set_status(Purpose::Revocation, old.acceptance.status_index, true)

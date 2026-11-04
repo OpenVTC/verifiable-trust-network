@@ -3,17 +3,21 @@
 //! - **Send:** an admin sends to a role. The network signs a message and delivers it to the
 //!   endpoint of every group its acknowledged members registered for that role. Each delivery
 //!   carries a hop signed by this network.
-//! - **Receive** (`POST /v1/relay/{role}`): a parent network delivers to this network's
-//!   network group. The envelope is verified, end to end: origin signature, hop chain, hop
-//!   limit, expiry. The delivery must come from a network this one is a current member of,
-//!   addressed to the group this network registered with it. Then it is relayed on to this
-//!   network's own groups for the local role.
+//! - **Receive** (`vtn/relay/deliver`): a parent network delivers to this network's network
+//!   group. The request's signer is the delivering network, and must be one this network is a
+//!   current member of. The envelope is verified end to end (origin signature, hop chain, hop
+//!   limit, expiry); its last hop must be the signer's, addressed to the group this network
+//!   registered with it. Then it is relayed on to this network's own groups for the local
+//!   role.
 //!
 //! Each network expands only its own groups, so no network learns another's roster. The
 //! sender learns which groups accepted, counted through relays (the receipts), and never who
 //! is in them.
 //!
-//! Delivery is HTTPS, one request per group per hop. A delivery that fails in transport is
+//! Delivery is HTTPS, one request per group per hop: a `vtn/relay/deliver` Trust Task, signed
+//! by this network, to a member network's group (`<network DID>#role-<role>`, A14), and
+//! `{ envelope }` posted to any other group's endpoint (a community's inbox, until
+//! `vtc/networks` 0.2 gives communities a task for it). A delivery that fails in transport is
 //! **queued** in the store and retried with exponential backoff, until it succeeds, the
 //! message expires, or `relay.max_attempts` is reached. The broadcast's receipt is updated
 //! as it goes. A refusal is final, and not retried.
@@ -26,11 +30,12 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::task::JoinSet;
-use vti_vtn::VtnClient;
+use vti_specs_vtn::vtn::relay::deliver::v0_1 as specs;
 use vti_vtn::VtnError;
 use vti_vtn::groups::network_group_id;
 use vti_vtn::identity::Identity;
 use vti_vtn::relay::{self, DeliveryStatus, Envelope, Outgoing, Receipt};
+use vti_vtn::{ClientError, VtnClient};
 
 use crate::error::{ApiError, ApiResult};
 use crate::network::Network;
@@ -78,11 +83,11 @@ pub struct OutboxItem {
     pub last_error: String,
 }
 
-/// The answer to a relay delivery.
+/// The answer to a relay delivery (`vtn/relay/deliver`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RelayResponse {
     pub status: DeliveryStatus,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub relayed: Vec<Receipt>,
 }
 
@@ -126,29 +131,59 @@ impl Network {
         Ok(record)
     }
 
-    /// A parent network delivers to this network's group for `local_role`.
-    pub async fn receive(&self, local_role: &str, envelope: Envelope) -> ApiResult<RelayResponse> {
+    /// `from`, the request's signer, delivers to this network's group for `local_role`.
+    pub async fn receive(
+        &self,
+        from: &str,
+        local_role: &str,
+        envelope: Envelope,
+    ) -> ApiResult<RelayResponse> {
         if !self.settings.relay.accept {
             return Err(ApiError::Forbidden);
         }
+        let joined = self
+            .store
+            .membership::<crate::memberships::Membership>(from)
+            .await?
+            .is_some_and(|m| m.state == crate::memberships::MembershipState::Acknowledged);
+        if !joined {
+            return Err(ApiError::coded(
+                "notMember",
+                format!("{from} is not a network this one is a member of"),
+            ));
+        }
+        if self.role(local_role).is_none() {
+            return Err(ApiError::coded(
+                "unknownRole",
+                format!("this network defines no role {local_role:?}"),
+            ));
+        }
+        let invalid = |why: String| ApiError::coded("envelopeInvalid", why);
         let verified = relay::verify(
             &envelope,
             self.resolver.as_ref(),
             Utc::now(),
             self.settings.relay.max_hops,
         )
-        .await?;
-        let group = network_group_id(self.did(), local_role);
-        if verified.to != group {
-            return Err(rejected(
-                "the envelope is not addressed to this network's group",
-            ));
-        }
-        if self.upstream_role(&verified.from, &group).await?.as_deref() != Some(local_role) {
-            return Err(rejected(format!(
-                "{} is not a network this one serves with role {local_role:?}",
+        .await
+        .map_err(|e| invalid(e.to_string()))?;
+        if verified.from != from {
+            return Err(invalid(format!(
+                "the envelope's last hop is {}'s, not the deliverer's",
                 verified.from
             )));
+        }
+        let group = network_group_id(self.did(), local_role);
+        if verified.to != group {
+            return Err(invalid(
+                "the envelope is not addressed to this network's group".into(),
+            ));
+        }
+        if self.upstream_role(from, &group).await?.as_deref() != Some(local_role) {
+            return Err(ApiError::coded(
+                "unknownRole",
+                format!("this network did not register {group} with {from}"),
+            ));
         }
         if !self.store.first_sighting(&verified.id).await? {
             return Ok(RelayResponse {
@@ -257,7 +292,12 @@ impl Network {
                     }
                 }
                 let envelope = Envelope { message, hops };
-                let r = deliver(&client, &group.endpoint, envelope.clone(), receipt).await;
+                let target = Target {
+                    member: &group.member,
+                    group: &group.group,
+                    endpoint: &group.endpoint,
+                };
+                let r = deliver(&client, &identity, target, envelope.clone(), receipt).await;
                 let retry = (r.status == DeliveryStatus::Failed)
                     .then(|| (group.endpoint.clone(), envelope));
                 (r, retry)
@@ -337,9 +377,15 @@ impl Network {
                 network: relayed.is_some(),
                 relayed: relayed.unwrap_or_default(),
             };
+            let target = Target {
+                member: &item.member,
+                group: &item.group,
+                endpoint: &item.endpoint,
+            };
             let r = deliver(
                 &self.client(""),
-                &item.endpoint,
+                &self.identity,
+                target,
                 item.envelope.clone(),
                 receipt,
             )
@@ -432,23 +478,60 @@ impl Network {
     }
 }
 
+/// Where one delivery goes.
+struct Target<'a> {
+    member: &'a str,
+    group: &'a str,
+    endpoint: &'a str,
+}
+
+impl Target<'_> {
+    /// The member network's local role, when the group is a network group (A14).
+    fn network_role(&self) -> Option<&str> {
+        self.group
+            .strip_prefix(self.member)
+            .and_then(|rest| rest.strip_prefix("#role-"))
+    }
+}
+
 async fn deliver(
     client: &VtnClient,
-    endpoint: &str,
+    identity: &Identity,
+    target: Target<'_>,
     envelope: Envelope,
     receipt: impl Fn(DeliveryStatus, Option<String>, Option<Vec<Receipt>>) -> Receipt,
 ) -> Receipt {
+    let Some(role) = target.network_role() else {
+        // A community's inbox: any 2xx is acceptance.
+        return match client
+            .post_url(target.endpoint, &json!({ "envelope": envelope }))
+            .await
+        {
+            Ok(_) => receipt(DeliveryStatus::Delivered, None, None),
+            Err(e) if matches!(e.status(), Some(403 | 422)) => {
+                receipt(DeliveryStatus::Refused, Some(e.to_string()), None)
+            }
+            Err(e) => receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+        };
+    };
+    let payload: specs::Payload = match serde_json::from_value(json!({
+        "role": role,
+        "envelope": envelope,
+    })) {
+        Ok(p) => p,
+        Err(e) => return receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+    };
+    let request = match vti_vtn::tasks::sign_request(identity, target.member, &payload).await {
+        Ok(r) => r,
+        Err(e) => return receipt(DeliveryStatus::Failed, Some(e.to_string()), None),
+    };
     match client
-        .post_url(endpoint, &json!({ "envelope": envelope }))
+        .send_request_to::<RelayResponse>(target.endpoint, &request, target.member)
         .await
     {
-        // A network relay answers with a RelayResponse. Any other endpoint (a community's
-        // group inbox) that answers 2xx has accepted it.
-        Ok(body) => match serde_json::from_value::<RelayResponse>(body) {
-            Ok(r) => receipt(r.status, None, Some(r.relayed)),
-            Err(_) => receipt(DeliveryStatus::Delivered, None, None),
-        },
-        Err(e) if matches!(e.status(), Some(403 | 422)) => {
+        Ok(r) => receipt(r.status, None, Some(r.relayed)),
+        // The member network declined it: final. A server-side failure may pass.
+        Err(e @ ClientError::Refused { status, .. }) if status < 500 => {
             receipt(DeliveryStatus::Refused, Some(e.to_string()), None)
         }
         Err(e) => receipt(DeliveryStatus::Failed, Some(e.to_string()), None),

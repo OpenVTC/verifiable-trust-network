@@ -389,11 +389,14 @@ impl Network {
         let to = transition(Some(entry.state), Event::Acknowledge)?;
         let missing = self.missing_required_roles(did).await?;
         if !missing.is_empty() {
-            return Err(VtnError::Rejected(format!(
-                "register a group for each required role before acknowledging: {}",
-                missing.join(", ")
-            ))
-            .into());
+            return Err(ApiError::coded_with(
+                "rolesUnregistered",
+                format!(
+                    "register a group for each required role before acknowledging: {}",
+                    missing.join(", ")
+                ),
+                serde_json::json!({ "roles": missing }),
+            ));
         }
         let offer = entry
             .offer

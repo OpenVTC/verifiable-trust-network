@@ -9,8 +9,14 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use trust_tasks_rs::RequestPayload;
+use vti_specs_vtn::vtn as specs;
+use vti_vtn::VtnClient;
+use vti_vtn::identity::Identity;
+
 use crate::profile::{AdminKey, NetworkRef, Profile};
-use vti_vtn::{VtnClient, encode_did, encode_query};
 
 #[derive(Parser)]
 #[command(
@@ -37,7 +43,7 @@ enum Command {
     /// The networks this NNM administers.
     #[command(subcommand)]
     Networks(NetworksCommand),
-    /// Show the selected network and check that you can sign in to it.
+    /// Show the selected network and check that it takes you as an administrator.
     Status,
     /// List entries, or show one in full.
     Entries {
@@ -54,8 +60,8 @@ enum Command {
         #[command(flatten)]
         profile: ProfileArgs,
     },
-    /// Edit an entry's directory profile (name, description, URL, tags). Replaces the
-    /// description, URL and tags; re-issues no credential.
+    /// Edit an entry's directory profile (name, description, URL, tags). Changes only what
+    /// you name (an empty value clears it); re-issues no credential.
     Profile {
         did: String,
         #[arg(long)]
@@ -75,16 +81,6 @@ enum Command {
         /// Also search member networks' indexes, showing the path to each result.
         #[arg(long)]
         federated: bool,
-    },
-    /// Print a session token, e.g. to open a restricted directory in the browser.
-    Token,
-    /// Act as a wallet for a browser sign-in: sign the `vtn-signin:` link a landing page
-    /// shows, with this NNM's admin key. The page then signs in.
-    Login {
-        link: String,
-        /// A membership credential (JSON file) to present, to sign in as a member.
-        #[arg(long)]
-        membership: Option<PathBuf>,
     },
     /// The roles members register groups for.
     Roles,
@@ -148,7 +144,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// The network's signed public index.
+    /// The network's signed index (a public directory only; see `entries`).
     Index,
     /// The audit log.
     Audit,
@@ -188,6 +184,10 @@ enum MembershipsCommand {
     Join {
         /// The parent network's URL.
         url: String,
+        /// The parent's DID, if you know it: the network at `url` must answer as it.
+        /// Default: whatever `url` answers as, which is printed.
+        #[arg(long)]
+        parent: Option<String>,
         /// `<parent role>=<local role>`, repeatable.
         #[arg(long = "role", value_parser = parse_mapping)]
         roles: Vec<(String, String)>,
@@ -202,7 +202,12 @@ enum MembershipsCommand {
     /// Leave a parent network (repudiate its grant).
     Leave { parent: String },
     /// Repudiate a parent network's listing of this one.
-    Repudiate { url: String },
+    Repudiate {
+        url: String,
+        /// The parent's DID (default: whatever `url` answers as).
+        #[arg(long)]
+        parent: Option<String>,
+    },
 }
 
 fn parse_mapping(s: &str) -> Result<(String, String), String> {
@@ -238,8 +243,19 @@ struct ProfileArgs {
 }
 
 impl ProfileArgs {
+    /// The fields given, and only those.
     fn json(&self) -> Value {
-        json!({ "description": self.description, "url": self.url, "tags": self.tags })
+        let mut body = serde_json::Map::new();
+        if let Some(d) = &self.description {
+            body.insert("description".into(), json!(d));
+        }
+        if let Some(u) = &self.url {
+            body.insert("url".into(), json!(u));
+        }
+        if !self.tags.is_empty() {
+            body.insert("tags".into(), json!(self.tags));
+        }
+        Value::Object(body)
     }
 }
 
@@ -272,22 +288,6 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
-        Command::Login { link, membership } => {
-            let link = vti_vtn::SignInLink::parse(&link)?;
-            let membership = match membership {
-                Some(p) => Some(serde_json::from_str(&std::fs::read_to_string(&p)?)?),
-                None => None,
-            };
-            let admin = profile.admin()?.identity()?;
-            let grant = link.complete(&admin, membership).await?;
-            println!(
-                "Signed in to {} as {} ({}). The page will continue.",
-                link.network,
-                admin.did(),
-                grant["role"].as_str().unwrap_or("?")
-            );
-            Ok(())
-        }
         command => admin_command(command, &profile, cli.network.as_deref()).await,
     }
 }
@@ -396,16 +396,60 @@ async fn networks(
     }
 }
 
+/// One network, acted on as this NNM's administrator: every request a `vtn/*` Trust Task
+/// signed by the admin key, for the network DID recorded in the profile.
+struct Nnm {
+    client: VtnClient,
+    admin: Identity,
+    network: String,
+}
+
+impl Nnm {
+    /// Send task `P` with `payload`, and its response as JSON.
+    async fn call<P>(&self, payload: Value) -> anyhow::Result<Value>
+    where
+        P: RequestPayload + DeserializeOwned,
+        P::Response: Serialize,
+    {
+        let payload: P =
+            serde_json::from_value(payload).with_context(|| format!("building {}", P::TYPE_URI))?;
+        let answer = self
+            .client
+            .task(&self.admin, &self.network, &payload)
+            .await?;
+        Ok(serde_json::to_value(answer)?)
+    }
+}
+
+/// The DID the network at `url` answers as, checked against `expected` when given.
+async fn network_at(url: &str, expected: Option<String>) -> anyhow::Result<String> {
+    let info = VtnClient::new(url.trim_end_matches('/')).profile().await?;
+    let did = info["did"]
+        .as_str()
+        .with_context(|| format!("{url} names no DID"))?
+        .to_string();
+    if let Some(expected) = expected
+        && expected != did
+    {
+        anyhow::bail!("{url} answers as {did}, not {expected}");
+    }
+    eprintln!(
+        "parent: {} ({did})",
+        info["profile"]["name"].as_str().unwrap_or("unnamed")
+    );
+    Ok(did)
+}
+
 async fn admin_command(
     command: Command,
     profile: &Profile,
     network: Option<&str>,
 ) -> anyhow::Result<()> {
     let (name, net) = profile.network(network)?;
-    let mut client = VtnClient::new(&net.url);
+    let client = VtnClient::new(&net.url);
 
-    // The service must still be the network recorded for this name: the sign-in is bound
-    // to that DID, and is refused for any other audience.
+    // The service must still be the network recorded for this name: every request names
+    // that DID as its recipient, and is refused by any other.
     let info = client.profile().await?;
     if info["did"].as_str() != Some(net.did.as_str()) {
         anyhow::bail!(
@@ -416,28 +460,31 @@ async fn admin_command(
         );
     }
 
-    let admin = profile.admin()?.identity()?;
-    client.sign_in(&admin, &net.did, None).await?;
+    let nnm = Nnm {
+        client,
+        admin: profile.admin()?.identity()?,
+        network: net.did.clone(),
+    };
 
     match command {
         Command::Status => {
-            let me = client.get("/v1/admin/whoami").await?;
+            // An administrator-only read: it succeeds only if the network takes this key.
+            nnm.call::<specs::listings::list::v0_1::Payload>(json!({}))
+                .await?;
             println!("network:  {name} ({})", net.did);
             println!("url:      {}", net.url);
-            println!(
-                "admin:    {} (signed in)",
-                me["did"].as_str().unwrap_or("?")
-            );
+            println!("admin:    {} (accepted)", nnm.admin.did());
             Ok(())
         }
         Command::Entries { did: Some(did) } => print(
-            &client
-                .get(&format!("/v1/admin/entries/{}", encode_did(&did)))
-                .await?,
+            &nnm.call::<specs::listings::show::v0_1::Payload>(json!({ "did": did }))
+                .await?["entry"],
         ),
         Command::Entries { did: None } => {
-            let entries = client.get("/v1/admin/entries").await?;
-            for e in entries.as_array().into_iter().flatten() {
+            let entries = nnm
+                .call::<specs::listings::list::v0_1::Payload>(json!({}))
+                .await?;
+            for e in entries["entries"].as_array().into_iter().flatten() {
                 println!(
                     "{:<13} {:<10} {}  {}",
                     e["state"].as_str().unwrap_or("?"),
@@ -448,15 +495,12 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Index => print(&client.get("/v1/index").await?),
+        Command::Index => print(&nnm.client.get("/v1/index").await?),
         Command::Roles => {
-            for r in client
-                .get("/v1/admin/roles")
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
+            let roles = nnm
+                .call::<specs::roles::list::v0_1::Payload>(json!({}))
+                .await?;
+            for r in roles["roles"].as_array().into_iter().flatten() {
                 println!(
                     "{:<20} {:<9} {}",
                     r["name"].as_str().unwrap_or("?"),
@@ -471,11 +515,14 @@ async fn admin_command(
             Ok(())
         }
         Command::Groups { role } => {
-            let path = match role {
-                Some(r) => format!("/v1/admin/groups?role={}", encode_query(&r)),
-                None => "/v1/admin/groups".into(),
+            let payload = match role {
+                Some(r) => json!({ "role": r }),
+                None => json!({}),
             };
-            for g in client.get(&path).await?.as_array().into_iter().flatten() {
+            let groups = nnm
+                .call::<specs::groups::list::v0_1::Payload>(payload)
+                .await?;
+            for g in groups["groups"].as_array().into_iter().flatten() {
                 println!(
                     "{:<14} {}  {}  -> {}",
                     g["role"].as_str().unwrap_or("?"),
@@ -493,12 +540,15 @@ async fn admin_command(
             class,
             reply_to,
         } => {
-            let record = client
-                .post(
-                    "/v1/admin/broadcasts",
-                    &json!({ "role": role, "subject": subject, "body": body, "class": class, "replyTo": reply_to }),
-                )
+            let mut payload =
+                json!({ "role": role, "subject": subject, "body": body, "class": class });
+            if let Some(r) = reply_to {
+                payload["replyTo"] = json!(r);
+            }
+            let answer = nnm
+                .call::<specs::broadcasts::send::v0_1::Payload>(payload)
                 .await?;
+            let record = &answer["broadcast"];
             println!(
                 "{}  reached {} group(s)",
                 record["id"].as_str().unwrap_or("?"),
@@ -508,25 +558,23 @@ async fn admin_command(
             Ok(())
         }
         Command::Broadcasts { id: Some(id) } => {
-            let record = client
-                .get(&format!("/v1/admin/broadcasts/{}", encode_query(&id)))
+            let answer = nnm
+                .call::<specs::broadcasts::show::v0_1::Payload>(json!({ "id": id }))
                 .await?;
+            let record = &answer["broadcast"];
             print(&record["message"])?;
             println!("reached {} group(s)", record["reached"]);
             print_receipts(&record["receipts"], 1);
             Ok(())
         }
         Command::Broadcasts { id: None } => {
-            for b in client
-                .get("/v1/admin/broadcasts")
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
+            let answer = nnm
+                .call::<specs::broadcasts::list::v0_1::Payload>(json!({}))
+                .await?;
+            for b in answer["broadcasts"].as_array().into_iter().flatten() {
                 println!(
                     "{}  {:<8} {:<10} reached {:<4} {}  {}",
-                    b["at"].as_str().unwrap_or("?"),
+                    b["recordedAt"].as_str().unwrap_or("?"),
                     b["direction"].as_str().unwrap_or("?"),
                     b["role"].as_str().unwrap_or("?"),
                     b["reached"],
@@ -536,51 +584,42 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Memberships(cmd) => memberships(&client, cmd).await,
+        Command::Memberships(cmd) => memberships(&nnm, cmd).await,
         Command::Rooms => {
-            for r in client
-                .get("/v1/rooms")
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
+            let answer = nnm
+                .call::<specs::rooms::list::v0_1::Payload>(json!({}))
+                .await?;
+            for r in answer["rooms"].as_array().into_iter().flatten() {
                 println!(
                     "{:<16} {:<28} role {:<14} pass {} min",
                     r["id"].as_str().unwrap_or("?"),
                     r["name"].as_str().unwrap_or("?"),
                     r["role"].as_str().unwrap_or("?"),
-                    r["pass_minutes"]
+                    r["passMinutes"]
                 );
             }
             Ok(())
         }
         Command::Outbox { retry } => {
             if retry {
-                let r = client.post("/v1/admin/outbox/retry", &json!({})).await?;
+                let r = nnm
+                    .call::<specs::outbox::retry::v0_1::Payload>(json!({}))
+                    .await?;
                 println!("attempted {}", r["attempted"]);
             }
-            for i in client
-                .get("/v1/admin/outbox")
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
+            let answer = nnm
+                .call::<specs::outbox::list::v0_1::Payload>(json!({}))
+                .await?;
+            for i in answer["items"].as_array().into_iter().flatten() {
                 println!(
                     "{}  attempt {:<2} next {}  {}  {}",
                     i["messageId"].as_str().unwrap_or("?"),
                     i["attempts"],
-                    i["nextAttempt"].as_str().unwrap_or("?"),
+                    i["nextAttemptAt"].as_str().unwrap_or("?"),
                     i["member"].as_str().unwrap_or("?"),
                     i["lastError"].as_str().unwrap_or("")
                 );
             }
-            Ok(())
-        }
-        Command::Token => {
-            println!("{}", client.token().unwrap_or_default());
-            eprintln!("Valid for an hour. Paste it into the landing page's session-token box.");
             Ok(())
         }
         Command::Directory {
@@ -589,25 +628,25 @@ async fn admin_command(
             members_only,
             federated,
         } => {
-            let mut params = vec![format!("members_only={members_only}")];
+            let mut payload = json!({ "membersOnly": members_only });
             if !query.is_empty() {
-                params.push(format!("q={}", encode_query(&query.join(" "))));
+                payload["q"] = json!(query.join(" "));
             }
             if let Some(kind) = kind {
-                params.push(format!("kind={}", kind.as_str()));
+                payload["kind"] = json!(kind.as_str());
             }
-            let path = if federated {
-                "/v1/directory/federated"
+            let (rows, unreachable) = if federated {
+                let found = nnm
+                    .call::<specs::directory::federated::v0_1::Payload>(payload)
+                    .await?;
+                (found["results"].clone(), found["unreachable"].clone())
             } else {
-                "/v1/directory"
+                let found = nnm
+                    .call::<specs::directory::search::v0_1::Payload>(payload)
+                    .await?;
+                (found["entries"].clone(), Value::Null)
             };
-            let found = client.get(&format!("{path}?{}", params.join("&"))).await?;
-            let rows = if federated {
-                found["results"].clone()
-            } else {
-                found.clone()
-            };
-            for u in found["unreachable"].as_array().into_iter().flatten() {
+            for u in unreachable.as_array().into_iter().flatten() {
                 eprintln!(
                     "indeterminate: {} ({})",
                     u["network"].as_str().unwrap_or("?"),
@@ -646,13 +685,12 @@ async fn admin_command(
             label,
             profile,
         } => {
-            let mut body = profile.json();
-            body["label"] = json!(label);
-            client
-                .post(
-                    &format!("/v1/admin/entries/{}/profile", encode_did(&did)),
-                    &body,
-                )
+            let mut payload = profile.json();
+            payload["did"] = json!(did);
+            if let Some(label) = label {
+                payload["label"] = json!(label);
+            }
+            nnm.call::<specs::listings::update::v0_1::Payload>(payload)
                 .await?;
             println!("{did}: profile updated");
             Ok(())
@@ -663,37 +701,49 @@ async fn admin_command(
             label,
             profile,
         } => {
-            let mut body = profile.json();
-            body["did"] = json!(did);
-            body["kind"] = json!(kind.as_str());
-            body["label"] = json!(label);
-            let entry = client.post("/v1/admin/entries", &body).await?;
+            let mut payload = profile.json();
+            payload["did"] = json!(did);
+            payload["kind"] = json!(kind.as_str());
+            if let Some(label) = label {
+                payload["label"] = json!(label);
+            }
+            let answer = nnm
+                .call::<specs::listings::create::v0_1::Payload>(payload)
+                .await?;
             println!(
                 "{} listed as {} ({})",
                 did,
                 kind.as_str(),
-                entry["state"].as_str().unwrap_or("?")
+                answer["entry"]["state"].as_str().unwrap_or("?")
             );
             println!(
-                "It acknowledges by fetching {}/v1/entries/{}/offer",
-                net.url,
-                encode_did(&did)
+                "It acknowledges with vtn/membership/offer and vtn/membership/acknowledge at {}",
+                net.url
             );
             Ok(())
         }
-        Command::Suspend { did, reason } => action(&client, &did, "suspend", reason).await,
-        Command::Reinstate { did, reason } => action(&client, &did, "reinstate", reason).await,
-        Command::Remove { did, reason } => action(&client, &did, "remove", reason).await,
+        Command::Suspend { did, reason } => {
+            transition::<specs::listings::suspend::v0_1::Payload>(&nnm, &did, reason).await
+        }
+        Command::Reinstate { did, reason } => {
+            transition::<specs::listings::reinstate::v0_1::Payload>(&nnm, &did, reason).await
+        }
+        Command::Remove { did, reason } => {
+            transition::<specs::listings::remove::v0_1::Payload>(&nnm, &did, reason).await
+        }
         Command::Graph {
             include_exited,
             out,
         } => {
-            let graph = client
-                .get(&format!("/v1/admin/graph?include_exited={include_exited}"))
+            let answer = nnm
+                .call::<specs::graph::show::v0_1::Payload>(
+                    json!({ "includeExited": include_exited }),
+                )
                 .await?;
+            let graph = &answer["graph"];
             match out {
                 Some(path) => {
-                    std::fs::write(&path, serde_json::to_string_pretty(&graph)?)?;
+                    std::fs::write(&path, serde_json::to_string_pretty(graph)?)?;
                     eprintln!(
                         "{} nodes, {} edges -> {}",
                         graph["nodes"].as_array().map_or(0, Vec::len),
@@ -702,15 +752,17 @@ async fn admin_command(
                     );
                     Ok(())
                 }
-                None => print(&graph),
+                None => print(graph),
             }
         }
         Command::Audit => {
-            let audit = client.get("/v1/admin/audit").await?;
-            for e in audit.as_array().into_iter().flatten() {
+            let answer = nnm
+                .call::<specs::audit::list::v0_1::Payload>(json!({}))
+                .await?;
+            for e in answer["events"].as_array().into_iter().flatten() {
                 println!(
                     "{}  {:<11} {:<13} {}  by {}{}",
-                    e["at"].as_str().unwrap_or("?"),
+                    e["occurredAt"].as_str().unwrap_or("?"),
                     e["event"].as_str().unwrap_or("?"),
                     e["to"].as_str().unwrap_or("?"),
                     e["did"].as_str().unwrap_or("?"),
@@ -723,19 +775,19 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Keys(_) | Command::Networks(_) | Command::Login { .. } => {
-            unreachable!("handled above")
-        }
+        Command::Keys(_) | Command::Networks(_) => unreachable!("handled above"),
     }
 }
 
-async fn memberships(client: &VtnClient, cmd: MembershipsCommand) -> anyhow::Result<()> {
-    let show = |m: &Value| {
+async fn memberships(nnm: &Nnm, cmd: MembershipsCommand) -> anyhow::Result<()> {
+    use specs::memberships as m;
+    let show = |answer: &Value| {
+        let m = &answer["membership"];
         println!(
             "{:<13} {}  {}  {}",
             m["state"].as_str().unwrap_or("?"),
-            m["parentName"].as_str().unwrap_or("-"),
-            m["parent"].as_str().unwrap_or("?"),
+            m["name"].as_str().unwrap_or("-"),
+            m["network"].as_str().unwrap_or("?"),
             m["url"].as_str().unwrap_or("?")
         );
         for g in m["groups"].as_array().into_iter().flatten() {
@@ -749,51 +801,42 @@ async fn memberships(client: &VtnClient, cmd: MembershipsCommand) -> anyhow::Res
     let mapping = |(p, l): (String, String)| json!({ "parentRole": p, "localRole": l });
     match cmd {
         MembershipsCommand::List => {
-            for m in client
-                .get("/v1/admin/memberships")
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
-                show(m);
+            let answer = nnm.call::<m::list::v0_1::Payload>(json!({})).await?;
+            for membership in answer["memberships"].as_array().into_iter().flatten() {
+                show(&json!({ "membership": membership }));
             }
         }
-        MembershipsCommand::Join { url, roles } => {
+        MembershipsCommand::Join { url, parent, roles } => {
+            let network = network_at(&url, parent).await?;
             let roles: Vec<Value> = roles.into_iter().map(mapping).collect();
             show(
-                &client
-                    .post(
-                        "/v1/admin/memberships",
-                        &json!({ "url": url, "roles": roles }),
-                    )
-                    .await?,
+                &nnm.call::<m::join::v0_1::Payload>(
+                    json!({ "url": url, "network": network, "roles": roles }),
+                )
+                .await?,
             );
         }
-        MembershipsCommand::Serve { parent, mapping: m } => {
+        MembershipsCommand::Serve {
+            parent,
+            mapping: (p, l),
+        } => {
             show(
-                &client
-                    .post(
-                        &format!("/v1/admin/memberships/{}/groups", encode_did(&parent)),
-                        &mapping(m),
-                    )
-                    .await?,
+                &nnm.call::<m::groups::add::v0_1::Payload>(
+                    json!({ "network": parent, "parentRole": p, "localRole": l }),
+                )
+                .await?,
             );
         }
         MembershipsCommand::Leave { parent } => {
             show(
-                &client
-                    .post(
-                        &format!("/v1/admin/memberships/{}/leave", encode_did(&parent)),
-                        &json!({}),
-                    )
+                &nnm.call::<m::leave::v0_1::Payload>(json!({ "network": parent }))
                     .await?,
             );
         }
-        MembershipsCommand::Repudiate { url } => {
+        MembershipsCommand::Repudiate { url, parent } => {
+            let network = network_at(&url, parent).await?;
             show(
-                &client
-                    .post("/v1/admin/memberships/repudiate", &json!({ "url": url }))
+                &nnm.call::<m::repudiate::v0_1::Payload>(json!({ "url": url, "network": network }))
                     .await?,
             );
         }
@@ -817,18 +860,20 @@ fn print_receipts(receipts: &Value, depth: usize) {
     }
 }
 
-async fn action(
-    client: &VtnClient,
-    did: &str,
-    verb: &str,
-    reason: Option<String>,
-) -> anyhow::Result<()> {
-    let entry = client
-        .post(
-            &format!("/v1/admin/entries/{}/{verb}", encode_did(did)),
-            &json!({ "reason": reason }),
-        )
-        .await?;
-    println!("{did}: {}", entry["state"].as_str().unwrap_or("?"));
+/// Suspend, reinstate or remove `did`.
+async fn transition<P>(nnm: &Nnm, did: &str, reason: Option<String>) -> anyhow::Result<()>
+where
+    P: RequestPayload + DeserializeOwned,
+    P::Response: Serialize,
+{
+    let mut payload = json!({ "did": did });
+    if let Some(reason) = reason {
+        payload["reason"] = json!(reason);
+    }
+    let answer = nnm.call::<P>(payload).await?;
+    println!(
+        "{did}: {}",
+        answer["entry"]["state"].as_str().unwrap_or("?")
+    );
     Ok(())
 }
