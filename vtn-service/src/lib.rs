@@ -121,6 +121,7 @@ pub async fn build_state_with(
         auth: Arc::new(auth),
         directory: config.directory.clone(),
         accepted,
+        sign_in: config.auth.clone(),
     })
 }
 

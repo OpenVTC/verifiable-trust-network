@@ -165,6 +165,7 @@ async fn live_with(
             required: required_admins,
         }],
         relay: Default::default(),
+        auth: Default::default(),
         rooms,
         identity: None,
         secrets: None,

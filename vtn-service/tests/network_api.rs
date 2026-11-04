@@ -100,6 +100,7 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         directory: DirectoryConfig::default(),
         roles: vec![],
         relay: Default::default(),
+        auth: Default::default(),
         rooms: vec![],
         identity: None,
         secrets: None,

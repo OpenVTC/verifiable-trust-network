@@ -9,6 +9,10 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 
 ### Features
 
+- **service**: browser sign-in (A13). The network serves `auth/oob/*` through `vti-oob-server`, shared with the VTC: a wallet approves the landing page's own key, which then signs directory, graph, entry, role and room reads as the approver, for at most `[auth] browser_key_hours` (8 by default, 24 at most). No session, no cookie. `/.well-known/vtn` publishes `signIn` (link host, flow, scope).
+- **templates**: `vtn-host` advertises `TrustTaskHTTPS` and `SignInPortal`, which a wallet needs to find the network.
+- **landing page**: "Sign in with a wallet" on a restricted directory: the trigger link, the number to type into the wallet, and the approved key kept in this browser until it ends.
+
 - **service**: the API is `vtn/*` 0.1 Trust Tasks at `POST /v1/trust-tasks`, all 33, through the shared `vti-trust-task-server` pipeline. Every request is signed by its caller and every answer by the network; there is no sign-in and no session. Duplicate ids are recorded in the store, so a document executes once even across a restart. Payloads and responses are held to their published schemas, and refusals carry the codes the specifications declare.
 - **service**: broadcasts reach a member network as `vtn/relay/deliver`, signed by the delivering network, which must be one the receiver joined. A network registers its `/v1/trust-tasks` as its group's endpoint.
 - **service**: this network joins, leaves and repudiates a parent over `vtn/*` tasks; `memberships/join` and `repudiate` name the parent's DID, and a URL answering as another network is `networkMismatch`.

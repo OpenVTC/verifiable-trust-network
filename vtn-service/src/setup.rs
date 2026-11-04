@@ -292,6 +292,7 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
         directory: inputs.directory.clone(),
         roles: Vec::new(),
         relay: Default::default(),
+        auth: Default::default(),
         rooms: Vec::new(),
         identity: Some(ProvisionedIdentity {
             did: did.clone(),
