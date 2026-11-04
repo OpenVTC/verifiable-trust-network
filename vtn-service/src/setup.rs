@@ -319,10 +319,13 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
     println!("config_path={}", inputs.config_path.display());
     println!("vtn_did={did}");
     if let Some(p) = did_log {
-        println!(
-            "did_log={}  (serve it at the URL the DID names)",
-            p.display()
-        );
+        // A DID-hosting server publishes the log itself; only a self-hosted `url` needs
+        // the file served.
+        let what = match &inputs.webvh_server {
+            Some(server) => format!("a copy; {server} publishes the DID log"),
+            None => "serve it at the URL the DID names".to_string(),
+        };
+        println!("did_log={}  ({what})", p.display());
     }
     println!(
         "The setup DID {} keeps its grant until --admin-expires; remove it sooner with \
@@ -334,7 +337,7 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
         inputs.config_path.display()
     );
     println!(
-        "Then sign in from the NNM: nnm networks add <name> {}",
+        "Then add it to the NNM (its key must be one of `admins`): nnm networks add <name> {}",
         inputs.base_url
     );
     Ok(())
