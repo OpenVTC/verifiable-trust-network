@@ -59,6 +59,30 @@ nnm networks add whn https://whn.example.org
 nnm status
 ```
 
+### Where the keys are kept
+
+`[secrets] backend` in `vtn-setup.toml` (copied into `vtn.toml`) picks the store for the
+network's keys. Each backend except the two file ones is a build feature of `vtn-service`:
+
+| `backend` | Build | Notes |
+|---|---|---|
+| `keyring` | default | macOS Keychain, Linux Secret Service (D-Bus), Windows Credential Manager. A headless Linux server usually has none: pick another backend there. |
+| `encrypted_file` | always | `[secrets.encrypted_file] kek = { source = "passphrase", file = "…" }` (or `systemd_creds`; `tpm` with `--features tpm`) |
+| `plaintext` | always | **Dev and test only.** Needs `allow_plaintext = true`; the seed is written in clear to `<data_dir>/seed.plaintext`. |
+| `aws` | `aws-secrets` | AWS Secrets Manager (`aws_secret_name`, `aws_region`) |
+| `gcp` | `gcp-secrets` | GCP Secret Manager |
+| `azure` | `azure-secrets` | Azure Key Vault |
+| `vault` | `vault-secrets` | HashiCorp Vault KV v2 |
+| `kubernetes` | `k8s-secrets` | a namespaced Kubernetes `Secret` |
+
+`--features all-secrets` builds every backend but TPM (which needs the system `libtss2`):
+
+```sh
+cargo install --path vtn-service --features all-secrets
+```
+
+`config_seed` (the seed inline in the config file) is refused by `vtn setup`.
+
 ### Development (no VTA)
 
 ```sh

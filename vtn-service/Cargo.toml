@@ -14,6 +14,33 @@ readme = "README.md"
 name = "vtn"
 path = "src/main.rs"
 
+# Where the network's keys are kept: `[secrets] backend` in `vtn.toml` / `vtn-setup.toml`.
+# `plaintext` (dev only, with `allow_plaintext = true`) and `encrypted_file` are always
+# built in. Each other backend is a feature; `all-secrets` builds every one but TPM.
+[features]
+default = ["keyring"]
+# The OS credential store: macOS Keychain, Linux Secret Service (D-Bus), Windows
+# Credential Manager. A host without one still starts; only `backend = "keyring"` fails.
+keyring = ["vta-sdk/keyring", "vti-secrets/keyring"]
+aws-secrets = ["vti-secrets/aws-secrets"]
+gcp-secrets = ["vti-secrets/gcp-secrets"]
+azure-secrets = ["vti-secrets/azure-secrets"]
+# A namespaced Kubernetes `Secret`, for in-cluster deployments.
+k8s-secrets = ["vti-secrets/k8s-secrets"]
+# HashiCorp Vault (KV v2; kubernetes, token or approle auth).
+vault-secrets = ["vti-secrets/vault-secrets"]
+# A TPM 2.0 key-encryption key for `encrypted_file` (`kek = { source = "tpm" }`). Linux
+# only, and needs the system `libtss2` libraries to build, so not in `all-secrets`.
+tpm = ["vti-secrets/tpm"]
+all-secrets = [
+  "keyring",
+  "aws-secrets",
+  "gcp-secrets",
+  "azure-secrets",
+  "k8s-secrets",
+  "vault-secrets",
+]
+
 [dependencies]
 vti-vtn = { workspace = true }
 vti-trust-task-server = { workspace = true }

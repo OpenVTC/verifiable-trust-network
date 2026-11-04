@@ -44,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let cli = Cli::parse();
+    // Before any secret store is opened. Only a warning: the OS credential store is one
+    // backend of several, and a server using another one need not have it.
+    #[cfg(feature = "keyring")]
+    vta_sdk::keyring_init::warn_store_unavailable("vtn");
 
     match cli.command {
         Command::Setup {

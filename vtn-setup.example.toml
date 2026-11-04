@@ -19,9 +19,14 @@ url            = "https://whn.example.org/did"
 # The network's administrators: the DIDs their NNMs sign in as (`nnm keys generate`).
 admins         = ["did:key:z6Mk...replace-me"]
 
-[secrets]                      # where the VTA-minted keys are kept (vti-secrets backends)
-backend = "keyring"
-# backend = "vault" / "aws" / "gcp" / "azure" / "kubernetes" ...
+[secrets]                      # where the VTA-minted keys are kept (README: "Where the keys are kept")
+backend = "keyring"            # the OS credential store; a headless server usually has none
+# backend = "encrypted_file"   # always built in:
+# [secrets.encrypted_file]
+# kek = { source = "passphrase", file = "/srv/vtn/seed-passphrase" }
+# backend = "aws" / "gcp" / "azure" / "vault" / "kubernetes"   # build with --features all-secrets
+# backend = "plaintext"        # dev and test only, with:
+# allow_plaintext = true
 
 [directory]
 visibility = "members"         # "public" | "members" | "admins"
