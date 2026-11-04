@@ -51,7 +51,7 @@ impl OperatorMessages for VtnMessages {
             "pnm contexts create --id {context_id} --name \"Verifiable Trust Network\" \\\n  \
              --admin-did {setup_did} --admin-expires 1h\n\n  \
              and register the DID template the network is minted from:\n\n    \
-             pnm did-templates create templates/vtn-host.json --context {context_id}"
+             pnm did-templates create --file templates/vtn-host.json --context {context_id}"
         )
     }
 }
@@ -412,7 +412,7 @@ fn provision_failed(msg: &str) -> anyhow::Error {
         "VTA provisioning failed: {msg}. Check the VTA DID; that the setup DID was granted admin \
          of the context (`pnm contexts create … --admin-did <setup DID>`, or `pnm acl create` if \
          the context exists); and that the `vtn-host` template is registered in it (`pnm \
-         did-templates create templates/vtn-host.json --context <context>`)."
+         did-templates create --file templates/vtn-host.json --context <context>`)."
     )
 }
 

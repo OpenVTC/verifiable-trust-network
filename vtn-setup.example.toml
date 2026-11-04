@@ -4,7 +4,7 @@
 #   2. at the VTA (pnm, as an admin):
 #        pnm contexts create --id vtn --name "Verifiable Trust Network" \
 #          --admin-did <setup DID printed by step 1> --admin-expires 1h
-#        pnm did-templates create templates/vtn-host.json --context vtn
+#        pnm did-templates create --file templates/vtn-host.json --context vtn
 #   3. vtn setup --from vtn-setup.toml
 #   4. vtn --config /srv/vtn/vtn.toml serve
 
