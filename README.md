@@ -31,13 +31,12 @@ Phase 1 of the delivery plan, implemented:
 - **Trust Task API.** Every operation is a `vtn/*` Trust Task (trusttasks.org, `vtn/*/0.1`), signed by its caller: there is no sign-in and no session. A Trust Task answer is never evidence of a relationship; the credentials it carries are (`docs/trust-tasks.md`).
 - **Admin access.** Administrators are DIDs, listed in `admins`. The `nnm` signs each request with the operator's admin key.
 - **Nested networks.** A VTN joins a parent network that lists it (`nnm memberships join <url>`), sending the parent `vtn/*` tasks signed by its own identity, and can later leave or repudiate.
-- **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member networks receive it as `vtn/relay/deliver` and relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
+- **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member communities receive it as `vtc/networks/deliver` and pass it to the group's members. Member networks receive it as `vtn/relay/deliver` and relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
 - **Network rooms.** `[[rooms]]` opens a room for a role. A person in any group registered for that role, directly or through member networks, gets a short-lived room pass by presenting their group evidence.
 - **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
 - **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. A public directory is read with unsigned Trust Tasks. For a restricted one, a member community or network, or an administrator, signs in from a wallet: the wallet approves the page's own key (`auth/oob/*`, A13), which then reads as them for up to `[auth] browser_key_hours`. A person presenting a membership credential from a member community reads with their own tools.
 
 Not yet built (see the design's delivery plan):
-- the VTC side on `vtn/*` tasks (`vtc/networks/*` 0.2); a community's group inbox is still `{ envelope }` over HTTPS (A15)
 - VTI roles and approvals
 - trust-task transports (TSP/DIDComm)
 - TSP/DIDComm delivery transports (A15)

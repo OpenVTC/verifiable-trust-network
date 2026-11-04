@@ -45,6 +45,7 @@ all-secrets = [
 vti-vtn = { workspace = true }
 vti-trust-task-server = { workspace = true }
 vti-specs-vtn = { workspace = true }
+vti-specs-vtc = { workspace = true }
 vti-oob-server = { workspace = true }
 vti-specs-core = { workspace = true }
 trust-tasks-rs = { workspace = true }

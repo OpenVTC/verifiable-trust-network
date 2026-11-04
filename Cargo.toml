@@ -29,6 +29,8 @@ vti-vtn = { version = "0.4", features = ["client", "resolve"] }
 vti-trust-task-server = "0.3"
 # The generated `vtn/*` 0.1 payload and response types, and their schema index.
 vti-specs-vtn = "0.2"
+# `vtc/networks/deliver`: how this network delivers a broadcast to a member community.
+vti-specs-vtc = "0.5"
 # `auth/oob/*` wallet sign-in for the landing page, shared with the VTC.
 vti-oob-server = "0.2"
 vti-specs-core = "0.4"
@@ -63,3 +65,15 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# Until the VTI release with vtc/networks/deliver is on crates.io. Remove once published.
+[patch.crates-io]
+vti-vtn = { path = "../../vti-worktrees/vtc-networks-02/vti-vtn" }
+vti-common = { path = "../../vti-worktrees/vtc-networks-02/vti-common" }
+vta-sdk = { path = "../../vti-worktrees/vtc-networks-02/vta-sdk" }
+vti-trust-task-server = { path = "../../vti-worktrees/vtc-networks-02/vti-trust-task-server" }
+vti-specs-vtn = { path = "../../vti-worktrees/vtc-networks-02/vti-specs-vtn" }
+vti-specs-core = { path = "../../vti-worktrees/vtc-networks-02/vti-specs-core" }
+vti-specs-vtc = { path = "../../vti-worktrees/vtc-networks-02/vti-specs-vtc" }
+vti-secrets = { path = "../../vti-worktrees/vtc-networks-02/vti-secrets" }
+vti-oob-server = { path = "../../vti-worktrees/vtc-networks-02/vti-oob-server" }
