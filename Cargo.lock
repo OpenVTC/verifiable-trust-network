@@ -5480,6 +5480,8 @@ dependencies = [
 [[package]]
 name = "vti-specs-vtn"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70250001b8411dcf645efd05ab2299548d88382776b27a1b250c0daf49be9431"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -5487,7 +5489,9 @@ dependencies = [
 
 [[package]]
 name = "vti-vtn"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0707f4a0321d28f07605e50d66c68d33df990da890d49237fb6d785daeca0f86"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-secrets-resolver",
