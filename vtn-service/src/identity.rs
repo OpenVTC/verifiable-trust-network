@@ -10,16 +10,12 @@
 
 use std::path::Path;
 
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use vta_sdk::did_secrets::{DidSecretsBundle, SecretEntry};
 use vta_sdk::sealed_transfer::DidKeyMaterialV2;
-use vta_sdk::trust_task_proof::{ProofPurpose, PurposeVmResolver, TrustTaskVmResolver};
 use vti_common::seed_store::SeedStore;
-use vti_vtn::VtnError;
 use vti_vtn::identity::Identity;
-use vti_vtn::verify::{KeyFuture, KeyResolver};
 
 use crate::config::Config;
 
@@ -139,47 +135,7 @@ pub fn bundle_from_material(material: &DidKeyMaterialV2) -> DidSecretsBundle {
 
 // ---------------------------------------------------------------- resolver
 
-/// Resolves parties' keys through the VTA SDK's purpose-checking resolver: `did:key` locally,
-/// `did:webvh` (what a VTA-provisioned VTC or VTN is) over the network. A key is accepted only
-/// if the DID document authorises it for the proof's purpose (VTI-KEY-022).
-#[derive(Clone)]
-pub struct VtaKeyResolver {
-    inner: TrustTaskVmResolver,
-}
-
-impl VtaKeyResolver {
-    /// Network resolution, through `resolver_url` when set.
-    pub async fn network(resolver_url: Option<&str>) -> anyhow::Result<Self> {
-        let client = DIDCacheClient::new(vta_sdk::resolver::build_verifier_did_cache_config(
-            resolver_url,
-            300,
-            1_000,
-        ))
-        .await
-        .map_err(|e| anyhow::anyhow!("build the DID resolver: {e}"))?;
-        Ok(Self {
-            inner: TrustTaskVmResolver::new(client),
-        })
-    }
-
-    /// No I/O: `did:key` and `did:peer` only.
-    pub fn offline() -> Self {
-        Self {
-            inner: TrustTaskVmResolver::did_key_only(),
-        }
-    }
-}
-
-impl KeyResolver for VtaKeyResolver {
-    fn resolve<'a>(&'a self, verification_method: &'a str, purpose: &'a str) -> KeyFuture<'a> {
-        Box::pin(async move {
-            let purpose = ProofPurpose::parse(purpose)?;
-            let key = self
-                .inner
-                .resolve_vm_for_purpose(verification_method, purpose)
-                .await
-                .map_err(VtnError::from)?;
-            Ok(key.public_key_bytes)
-        })
-    }
-}
+/// Resolves parties' keys: `did:key` locally, `did:webvh` (what a VTA-provisioned VTC or VTN
+/// is) over the network, accepting a key only if the DID document authorises it for the
+/// proof's purpose (VTI-KEY-022). The resolver the VTC and the NNM verify with too.
+pub use vti_vtn::resolve::VmKeyResolver as VtaKeyResolver;

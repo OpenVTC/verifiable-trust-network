@@ -99,9 +99,10 @@ impl Network {
         }
     }
 
-    /// A client for another network at `url`.
+    /// A client for another network at `url`, verifying its answers through this network's
+    /// resolver.
     pub(crate) fn client(&self, url: &str) -> VtnClient {
-        VtnClient::with_http(self.http.clone(), url)
+        VtnClient::with_http(self.http.clone(), url).verifying(self.resolver.clone())
     }
 
     pub fn roles(&self) -> &[RoleDef] {

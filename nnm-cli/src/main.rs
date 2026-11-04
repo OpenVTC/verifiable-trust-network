@@ -15,6 +15,7 @@ use trust_tasks_rs::RequestPayload;
 use vti_specs_vtn::vtn as specs;
 use vti_vtn::VtnClient;
 use vti_vtn::identity::Identity;
+use vti_vtn::resolve::VmKeyResolver;
 
 use crate::profile::{AdminKey, NetworkRef, Profile};
 
@@ -31,6 +32,9 @@ struct Cli {
     /// The network to act on (a name from `nnm networks list`). Default: the selected one.
     #[arg(long, short, global = true)]
     network: Option<String>,
+    /// A DID resolver to verify the network's answers through. Default: resolve directly.
+    #[arg(long, global = true)]
+    resolver_url: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -288,7 +292,15 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
-        command => admin_command(command, &profile, cli.network.as_deref()).await,
+        command => {
+            admin_command(
+                command,
+                &profile,
+                cli.network.as_deref(),
+                cli.resolver_url.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -444,9 +456,12 @@ async fn admin_command(
     command: Command,
     profile: &Profile,
     network: Option<&str>,
+    resolver_url: Option<&str>,
 ) -> anyhow::Result<()> {
     let (name, net) = profile.network(network)?;
-    let client = VtnClient::new(&net.url);
+    // Every answer must be signed by the network recorded for this name.
+    let resolver = VmKeyResolver::network(resolver_url).await?;
+    let client = VtnClient::new(&net.url).verifying(std::sync::Arc::new(resolver));
 
     // The service must still be the network recorded for this name: every request names
     // that DID as its recipient, and is refused by any other.

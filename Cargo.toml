@@ -24,7 +24,7 @@ type_complexity = "allow"
 [workspace.dependencies]
 # The VTN protocol, shared with the VTC: model, credentials, verification, groups, relay,
 # rooms, and (feature `client`) the `vtn/*` Trust Task client.
-vti-vtn = { version = "0.3", features = ["client"] }
+vti-vtn = { version = "0.3", features = ["client", "resolve"] }
 # The receive side of the `vtn/*` Trust Tasks (`POST /v1/trust-tasks`), shared with the VTC.
 vti-trust-task-server = "0.2"
 # The generated `vtn/*` 0.1 payload and response types, and their schema index.
@@ -63,3 +63,14 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# Until VTI #2439 is released to crates.io: build against that branch. Remove once published.
+[patch.crates-io]
+vti-vtn = { path = "../../vti-worktrees/vtn-verify-answers/vti-vtn" }
+vti-common = { path = "../../vti-worktrees/vtn-verify-answers/vti-common" }
+vta-sdk = { path = "../../vti-worktrees/vtn-verify-answers/vta-sdk" }
+vti-trust-task-server = { path = "../../vti-worktrees/vtn-verify-answers/vti-trust-task-server" }
+vti-specs-vtn = { path = "../../vti-worktrees/vtn-verify-answers/vti-specs-vtn" }
+vti-specs-core = { path = "../../vti-worktrees/vtn-verify-answers/vti-specs-core" }
+vti-secrets = { path = "../../vti-worktrees/vtn-verify-answers/vti-secrets" }
+vti-oob-server = { path = "../../vti-worktrees/vtn-verify-answers/vti-oob-server" }
