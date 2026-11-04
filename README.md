@@ -51,7 +51,7 @@ nnm keys generate                                    # your admin DID: put it in
 vtn setup --setup-key-out setup-key.json --context vtn
 #   at the VTA:  pnm contexts create --id vtn --name "Verifiable Trust Network" \
 #                  --admin-did <setup DID> --admin-expires 1h
-#                pnm did-templates create templates/vtn-host.json --context vtn
+#                pnm did-templates create --file templates/vtn-host.json --context vtn
 cp vtn-setup.example.toml vtn-setup.toml             # edit, then:
 vtn setup --from vtn-setup.toml                      # VTA mints the did:webvh, keys go to [secrets]
 vtn --config /srv/vtn/vtn.toml serve
