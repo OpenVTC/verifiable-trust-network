@@ -47,6 +47,9 @@ pub struct Config {
     pub roles: Vec<RoleDef>,
     #[serde(default)]
     pub relay: RelayConfig,
+    /// Browser sign-in (`auth/oob/*`, A13).
+    #[serde(default)]
+    pub auth: AuthConfig,
     /// Rooms the network opens for a role (design §5.4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rooms: Vec<crate::rooms::RoomDef>,
@@ -56,6 +59,37 @@ pub struct Config {
     /// Where the provisioned identity's keys are kept. Required with `[identity]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsConfig>,
+}
+
+/// Browser sign-in: a wallet approves the landing page's key (`auth/oob/*`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthConfig {
+    /// How long a browser key the wallet approved may sign as its approver, in hours: at
+    /// most 24 (A20). The grant's own end is the other bound; the earlier one applies.
+    #[serde(default = "default_browser_key_hours")]
+    pub browser_key_hours: u64,
+    /// The host of the trigger link the landing page shows a wallet (VTI-LNK-060): a
+    /// universal-link domain, never this network's own (VTI-LNK-084).
+    #[serde(default = "default_link_host")]
+    pub link_host: String,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            browser_key_hours: default_browser_key_hours(),
+            link_host: default_link_host(),
+        }
+    }
+}
+
+fn default_link_host() -> String {
+    vti_oob_server::DEFAULT_LINK_HOST.to_string()
+}
+
+fn default_browser_key_hours() -> u64 {
+    8
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +259,20 @@ impl Config {
             if !seen.insert(&role.name) {
                 errors.push(format!("roles: {:?} is defined twice", role.name));
             }
+        }
+        let portal_host = self
+            .base_url
+            .split("://")
+            .nth(1)
+            .map(|rest| rest.split(['/', ':']).next().unwrap_or(rest));
+        if let Err(e) = vti_oob_server::check_link_host(&self.auth.link_host, portal_host) {
+            errors.push(format!("auth: link_host: {e}"));
+        }
+        if !(1..=24).contains(&self.auth.browser_key_hours) {
+            errors.push(format!(
+                "auth: browser_key_hours must be 1..=24 (A20), not {}",
+                self.auth.browser_key_hours
+            ));
         }
         if !(1..=24 * 7).contains(&self.relay.ttl_hours) {
             errors.push(format!(

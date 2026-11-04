@@ -50,6 +50,11 @@ required = true
 name = "notifications"
 description = "Where each member wants network notices delivered"
 
+# Browser sign-in: a wallet approves the landing page's key (auth/oob, A13).
+# [auth]
+# browser_key_hours = 8              # how long an approved page key may sign; at most 24
+# link_host = "link.trustoverip.org" # the trigger link's universal-link host
+
 [relay]
 accept = true      # relay broadcasts from parent networks into this network's groups
 max_hops = 8

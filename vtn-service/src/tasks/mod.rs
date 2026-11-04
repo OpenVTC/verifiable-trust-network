@@ -13,6 +13,7 @@
 //! (A19).
 
 pub mod accepted;
+pub mod oob;
 pub mod wire;
 
 use std::future::Future;
@@ -66,10 +67,17 @@ impl VtnTasks {
                 resolver: state.network.resolver.clone(),
             },
             accepted: state.accepted.clone(),
-            policy: vti_specs_vtn::schema_index::spec_policy_for,
+            policy: spec_policy_for,
             state,
         }
     }
+}
+
+/// The policy each served specification declares: the `vtn/*` family, and `auth/oob/*`
+/// (`vti-specs-core`) for browser sign-in.
+fn spec_policy_for(type_uri: &str) -> Option<SpecPolicy> {
+    vti_specs_vtn::schema_index::spec_policy_for(type_uri)
+        .or_else(|| vti_specs_core::schema_index::spec_policy_for(type_uri))
 }
 
 impl TrustTaskService for VtnTasks {
@@ -103,6 +111,16 @@ impl SpineHooks for VtnTasks {
     async fn recipient(&self) -> Option<String> {
         Some(self.state.network.did().to_string())
     }
+
+    /// `auth/oob/*` is signed by keys made for the exchange: an Ed25519 `did:key`, decided
+    /// from the identifier before any proof is read (T21).
+    async fn before_proof(
+        &self,
+        doc: &TrustTask<Value>,
+        type_uri: &str,
+    ) -> Option<TrustTaskOutcome> {
+        vti_oob_server::precheck(doc, type_uri)
+    }
 }
 
 #[async_trait::async_trait]
@@ -129,9 +147,28 @@ impl Dispatcher for VtnTasks {
         received: Arc<Value>,
     ) -> BoxFuture<'a, TrustTaskOutcome> {
         Box::pin(async move {
+            if vti_oob_server::URIS.contains(&type_uri) {
+                let host = oob::VtnOobHost { state: &self.state };
+                let signer = ctx.verified_signer.clone().unwrap_or_default();
+                if let Some(outcome) =
+                    vti_oob_server::dispatch(&host, doc.clone(), type_uri, signer).await
+                {
+                    return outcome;
+                }
+            }
+            // A browser key a wallet approved signs as its approver, for the reads its
+            // delegation covers (`oob::SIGNING_SCOPE`); otherwise the signer is itself.
+            let signer = match ctx.verified_signer.as_deref() {
+                Some(key) => match oob::delegated_approver(&self.state, key, type_uri).await {
+                    Ok(Some(approver)) => Some(approver),
+                    Ok(None) => Some(key.to_string()),
+                    Err(e) => return refuse(&doc, type_uri, ApiError::Store(e)),
+                },
+                None => None,
+            };
             let call = Call {
                 state: &self.state,
-                signer: ctx.verified_signer.clone(),
+                signer,
                 received,
             };
             route(&call, &doc, type_uri).await

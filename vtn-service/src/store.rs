@@ -12,6 +12,7 @@
 //! | `relay_seen` | message id | first-seen time |
 //! | `outbox` | `<message id>\u{0}<group>` | [`OutboxItem`](crate::broadcast::OutboxItem) |
 //! | `accepted_ids` | Trust Task document `id` | [`AcceptedId`](crate::tasks::accepted::AcceptedId) |
+//! | `oob` | `oob_req:<request id>`, `delegation:<browser key>` | `auth/oob` sign-in requests and the delegations `redeem` arms (`vti_oob_server`) |
 
 use std::path::Path;
 
@@ -50,6 +51,7 @@ pub struct VtnStore {
     relay_seen: KeyspaceHandle,
     outbox: KeyspaceHandle,
     accepted_ids: KeyspaceHandle,
+    oob: KeyspaceHandle,
 }
 
 const NEXT_INDEX: &str = "next";
@@ -70,6 +72,7 @@ impl VtnStore {
             relay_seen: store.keyspace("relay_seen")?,
             outbox: store.keyspace("outbox")?,
             accepted_ids: store.keyspace("accepted_ids")?,
+            oob: store.keyspace("oob")?,
         })
     }
 
@@ -253,6 +256,11 @@ impl VtnStore {
     /// The accepted-document-id record (`crate::tasks::accepted`).
     pub fn accepted_ids(&self) -> &KeyspaceHandle {
         &self.accepted_ids
+    }
+
+    /// Browser sign-in requests and the delegations they arm (`crate::tasks::oob`).
+    pub fn oob(&self) -> &KeyspaceHandle {
+        &self.oob
     }
 }
 

@@ -104,6 +104,11 @@
   .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); border-radius: 8px; padding: 10px;
     overflow: auto; max-height: 260px; margin: 6px 0 0; }
   .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
+  .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .signin { margin-top: 12px; }
+  .signin .link { font-family: var(--mono); font-size: 12px; word-break: break-all; background: var(--bg);
+    border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  .signin .number { font-family: var(--mono); font-size: 28px; letter-spacing: 6px; margin: 6px 0; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -118,6 +123,8 @@
       <span>DID <span class="did" id="did">—</span> <button class="copy" data-copy-from="did" type="button">Copy</button></span>
     </div>
   </header>
+
+  <p class="session hidden" id="session" aria-live="polite"></p>
 
   <section class="stats" id="stats" aria-label="Network size"></section>
 
@@ -165,7 +172,18 @@
   <section id="restricted" class="notice hidden">
     <h2 id="restricted-title">Members-only directory</h2>
     <p id="restricted-text"></p>
-    <p>Signing in from this page, with a wallet approving it, is on its way. Until then, members and administrators search this directory with their own tools (<code>nnm directory</code>).</p>
+    <button class="btn" type="button" id="wallet-sign-in">Sign in with a wallet</button>
+    <div class="signin hidden" id="sign-in-panel">
+      <p>Open this link on the device that holds your wallet. It asks you to approve this page as you: a member community or network, or an administrator of this network.</p>
+      <p class="link" id="sign-in-link"></p>
+      <p><a id="sign-in-open" href="#" rel="noopener noreferrer">Open in wallet</a> <button class="copy" type="button" id="sign-in-copy">Copy link</button></p>
+      <div class="hidden" id="sign-in-number-box">
+        <p>When your wallet asks, enter this number:</p>
+        <p class="number" id="sign-in-number"></p>
+      </div>
+      <p id="sign-in-status">Waiting for your wallet…</p>
+      <button class="copy" type="button" id="sign-in-cancel">Cancel</button>
+    </div>
   </section>
 
   <footer>
@@ -186,26 +204,164 @@
     return { status: res.status, body };
   }
 
-  // A `vtn/*` read, as an unsigned Trust Task (docs/trust-tasks.md): the network answers it
-  // when its directory is public. `ok` and the response payload, or the refusal.
-  async function task(slug, payload = {}) {
-    const doc = {
-      id: "urn:uuid:" + crypto.randomUUID(),
-      type: `https://trusttasks.org/spec/${slug}/0.1`,
-      recipient: NETWORK,
-      issuedAt: new Date().toISOString(),
-      payload,
-    };
+  // ------------------------------------------------------------- signing
+  // The page's own key, K_b: an Ed25519 key made here, non-extractable, that a wallet
+  // approves (auth/oob/*, A13). Once approved, the network reads what it signs as the
+  // approver's, for directory reads, until the approval ends. Documents are signed
+  // eddsa-jcs-2022 for `authentication`, as the network verifies them.
+  const SPEC = "https://trusttasks.org/spec/";
+  const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const signer = { keypair: null, did: null, vm: null, approver: null, name: null, endsAt: 0 };
+
+  function b58(bytes) {
+    let zeros = 0;
+    while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+    const digits = [];
+    for (const byte of bytes) {
+      let carry = byte;
+      for (let j = 0; j < digits.length; j++) { carry += digits[j] << 8; digits[j] = carry % 58; carry = (carry / 58) | 0; }
+      while (carry > 0) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+    }
+    return "1".repeat(zeros) + digits.reverse().map((d) => B58[d]).join("");
+  }
+
+  // RFC 8785 for what Trust Task documents hold: strings, integers, booleans, objects.
+  function jcs(v) {
+    if (v === null || typeof v === "boolean") return String(v);
+    if (typeof v === "number") { if (!Number.isFinite(v)) throw new Error("JCS: non-finite"); return Object.is(v, -0) ? "0" : String(v); }
+    if (typeof v === "string") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(jcs).join(",") + "]";
+    if (typeof v === "object") return "{" + Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => JSON.stringify(k) + ":" + jcs(v[k])).join(",") + "}";
+    throw new Error("JCS: cannot encode " + typeof v);
+  }
+
+  async function sha256(text) {
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  }
+
+  function isoSeconds(ms) { return new Date(ms).toISOString().slice(0, 19) + "Z"; }
+
+  async function newKey() {
+    const keypair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", keypair.publicKey));
+    const multikey = "z" + b58(new Uint8Array([0xed, 0x01, ...raw]));
+    Object.assign(signer, { keypair, did: "did:key:" + multikey, vm: `did:key:${multikey}#${multikey}`, approver: null, name: null, endsAt: 0 });
+  }
+
+  // Sign `doc` as K_b: SHA-256(JCS(proof config)) || SHA-256(JCS(document without proof)).
+  async function sign(doc) {
+    const proof = { type: "DataIntegrityProof", cryptosuite: "eddsa-jcs-2022", verificationMethod: signer.vm,
+      created: isoSeconds(Date.now() - 60000), proofPurpose: "authentication" };
+    const a = await sha256(jcs(proof));
+    const b = await sha256(jcs(doc));
+    const data = new Uint8Array(64); data.set(a, 0); data.set(b, 32);
+    const sig = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, signer.keypair.privateKey, data));
+    return Object.assign({}, doc, { proof: Object.assign(proof, { proofValue: "z" + b58(sig) }) });
+  }
+
+  // Keep an approved key across reloads, in this browser only (IndexedDB holds the
+  // CryptoKey itself; its private half stays unreadable).
+  function db() {
+    return new Promise((resolve, reject) => {
+      const open = indexedDB.open("vtn-sign-in", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("key");
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+  }
+  async function keep() {
+    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").put(Object.assign({ network: NETWORK }, signer), "k"); } catch {}
+  }
+  async function restore() {
+    try {
+      const d = await db();
+      const saved = await new Promise((r) => { const q = d.transaction("key").objectStore("key").get("k"); q.onsuccess = () => r(q.result); q.onerror = () => r(null); });
+      if (saved && saved.network === NETWORK && saved.endsAt * 1000 > Date.now()) Object.assign(signer, saved);
+    } catch {}
+  }
+  async function forget() {
+    Object.assign(signer, { keypair: null, did: null, vm: null, approver: null, name: null, endsAt: 0 });
+    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").delete("k"); } catch {}
+  }
+
+  function signedIn() { return signer.approver && signer.endsAt * 1000 > Date.now(); }
+
+  // A Trust Task to this network: signed by K_b when `asKey` (auth/oob) or once signed in,
+  // otherwise unsigned (a public directory answers that). `ok` and the payload, or the
+  // refusal's code and payload.
+  async function send(type, payload, asKey) {
+    let doc = { id: "urn:uuid:" + crypto.randomUUID(), type, recipient: NETWORK, issuedAt: isoSeconds(Date.now()), payload };
+    if (asKey || signedIn()) { doc.issuer = signer.did; doc = await sign(doc); }
     const res = await fetch("/v1/trust-tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(doc),
     });
     const body = await res.json().catch(() => null);
-    if (body && typeof body.type === "string" && body.type === doc.type + "#response") {
-      return { ok: true, status: res.status, payload: body.payload };
+    if (body && body.type === type + "#response") return { ok: true, status: res.status, payload: body.payload };
+    const code = body && body.payload && typeof body.payload.code === "string" ? body.payload.code : "http" + res.status;
+    return { ok: false, status: res.status, code, error: body && body.payload };
+  }
+
+  // A `vtn/*` read.
+  function task(slug, payload = {}) { return send(`${SPEC}${slug}/0.1`, payload, false); }
+
+  // ------------------------------------------------------------- wallet sign-in
+  const OOB = { request: "auth/oob/request/0.2", redeem: "auth/oob/redeem/0.2", cancel: "auth/oob/cancel/0.1" };
+  let SIGN_IN = null;
+  let pending = null;
+
+  function encodeFrom(did) { return did.replace(/[&=#%]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()); }
+
+  function sessionBar() {
+    const box = $("session");
+    if (!signedIn()) { box.classList.add("hidden"); return; }
+    const out = el("button", { class: "copy", type: "button" }, "Sign out");
+    out.addEventListener("click", async () => { await forget(); location.reload(); });
+    box.replaceChildren("Signed in as ", el("b", {}, signer.name || signer.approver), " until ",
+      new Date(signer.endsAt * 1000).toLocaleTimeString(), out);
+    box.classList.remove("hidden");
+  }
+
+  async function startSignIn() {
+    const status = $("sign-in-status");
+    if (!SIGN_IN || !crypto.subtle) { status.textContent = "This browser cannot sign in here."; return; }
+    try { await newKey(); } catch { $("sign-in-panel").classList.remove("hidden"); status.textContent = "This browser has no Ed25519 support; use a current browser."; return; }
+    const opened = await send(SPEC + OOB.request, { purpose: "login", mode: "scan" }, true);
+    $("sign-in-panel").classList.remove("hidden");
+    if (!opened.ok) { status.textContent = (opened.error && opened.error.message) || "The network did not start a sign-in."; return; }
+    const id = opened.payload.requestId;
+    const exp = Math.floor(Date.parse(opened.payload.claimClosesAt) / 1000);
+    const link = `https://${SIGN_IN.linkHost}/t#_from=${encodeFrom(NETWORK)}&_id=${id}&_exp=${exp}&_type=${SIGN_IN.flow}`;
+    $("sign-in-link").textContent = link;
+    $("sign-in-open").href = link;
+    $("wallet-sign-in").classList.add("hidden");
+    pending = id;
+    status.textContent = "Waiting for your wallet…";
+    // Long-poll redeem until it is approved, declined or ends.
+    while (pending === id) {
+      const r = await send(SPEC + OOB.redeem, { requestId: id }, true);
+      if (pending !== id) return;
+      if (r.ok) {
+        Object.assign(signer, { approver: r.payload.subject, name: r.payload.displayName || null,
+          endsAt: Math.floor(Date.parse(r.payload.sessionEndsAt) / 1000) });
+        await keep();
+        location.reload();
+        return;
+      }
+      const details = (r.error && r.error.details) || {};
+      if (r.code.endsWith(":pending")) {
+        if (details.matchNumber) { $("sign-in-number").textContent = details.matchNumber; $("sign-in-number-box").classList.remove("hidden"); status.textContent = "Approve in your wallet."; }
+        continue;
+      }
+      pending = null;
+      $("wallet-sign-in").classList.remove("hidden");
+      $("sign-in-number-box").classList.add("hidden");
+      status.textContent = r.code.endsWith(":declined") ? "The sign-in was declined." :
+        r.code.endsWith(":requestExpired") ? "The sign-in expired. Start again." :
+        (r.error && r.error.message) || "The sign-in did not complete.";
+      return;
     }
-    return { ok: false, status: res.status, error: body && body.payload };
   }
 
   function el(tag, attrs = {}, ...children) {
@@ -301,10 +457,14 @@
     $("restricted").classList.remove("hidden");
     if (visibility === "admins") {
       $("restricted-title").textContent = "Private directory";
-      $("restricted-text").textContent = "This network's directory is visible to its administrators only.";
+      $("restricted-text").textContent = signedIn()
+        ? "You are signed in, but this network's directory is visible to its administrators only."
+        : "This network's directory is visible to its administrators only.";
     } else {
       $("restricted-title").textContent = "Members-only directory";
-      $("restricted-text").textContent = "This network's directory is visible to its members: a member community or network, or a person presenting a membership credential from a member community.";
+      $("restricted-text").textContent = signedIn()
+        ? "You are signed in, but not as a member of this network."
+        : "This network's directory is visible to its members: a member community or network, or an administrator.";
     }
   }
 
@@ -495,7 +655,11 @@
       if (href) fwLink.href = href; else fwLink.removeAttribute("href");
       $("did").textContent = info.did || "—";
       NETWORK = info.did || null;
+      SIGN_IN = info.signIn || null;
     }
+    await restore();
+    sessionBar();
+    if (!SIGN_IN || signedIn()) $("wallet-sign-in").classList.add("hidden");
     const visibility = info?.directory?.visibility || "public";
     if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
     const summary = await task("vtn/directory/summary");
@@ -519,6 +683,18 @@
   });
   bindSeg("state", "member");
   bindSeg("kind", "kind");
+  $("wallet-sign-in").addEventListener("click", startSignIn);
+  $("sign-in-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("sign-in-link").textContent); $("sign-in-copy").textContent = "Copied"; } catch {}
+  });
+  $("sign-in-cancel").addEventListener("click", async () => {
+    const id = pending;
+    pending = null;
+    if (id) await send(SPEC + OOB.cancel, { requestId: id }, true);
+    await forget();
+    $("sign-in-panel").classList.add("hidden");
+    $("wallet-sign-in").classList.remove("hidden");
+  });
   document.querySelectorAll("[data-copy-from]").forEach((b) => b.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($(b.dataset.copyFrom).textContent); b.textContent = "Copied"; }
     catch { b.textContent = "Copy failed"; }
