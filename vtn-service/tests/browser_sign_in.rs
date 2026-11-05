@@ -348,6 +348,23 @@ async fn a_wallet_approves_the_page_key_for_reads_only() {
         .task::<specs::membership::offer::v0_1::Payload>(&k_b, json!({}))
         .await;
     assert_eq!(code(&offer), "vtn/membership/offer:notListed");
+
+    // Sign-out: the key revokes its own delegation, and is no one again.
+    let revoke: vti_specs_core::auth::revoke_session::v0_2::Payload =
+        serde_json::from_value(json!({ "all": true, "reason": "logout" })).unwrap();
+    let out = net
+        .post(&sign_request(&k_b, &net.did, &revoke).await.unwrap())
+        .await;
+    assert_eq!(ok(&out)["revokedCount"], 1, "{out:#}");
+    let closed = net
+        .task::<specs::directory::search::v0_1::Payload>(&k_b, json!({}))
+        .await;
+    assert_eq!(code(&closed), "permissionDenied");
+    // Again: nothing left to revoke.
+    let again = net
+        .post(&sign_request(&k_b, &net.did, &revoke).await.unwrap())
+        .await;
+    assert_eq!(ok(&again)["revokedCount"], 0, "{again:#}");
 }
 
 #[tokio::test]

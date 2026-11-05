@@ -18,6 +18,8 @@
 //! - **What the key may sign** ([`SIGNING_SCOPE`]): reads of the published set. Nothing
 //!   administrative: that stays with the NNM, signed by the administrator's own key.
 //! - **What `redeem` issues:** a delegation of `K_b` to the approver, in the store.
+//! - **Sign-out:** `auth/revoke-session` `{ all: true }`, signed by `K_b` itself (a
+//!   delegation never covers `auth/*`), drops `K_b`'s delegation ([`revoke`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,6 +90,37 @@ pub async fn delegated_approver(
         .await?
         .map(|d| d.approver_did),
     )
+}
+
+/// `auth/revoke-session/0.2`: how the landing page signs out.
+pub use vti_specs_core::auth::revoke_session::v0_2::Payload as RevokeSession;
+
+/// Sign `key` out: drop the delegation it holds. `all`, or `subject` naming the key itself,
+/// targets it. Anything else names no session this network holds for the key, and revokes
+/// nothing (`revokedCount: 0`, which the task allows in place of `sessionNotFound`).
+/// Returns how many delegations went: 0 or 1.
+pub async fn revoke(
+    state: &AppState,
+    key: &str,
+    p: &RevokeSession,
+) -> Result<u64, crate::error::ApiError> {
+    if p.all == Some(false) {
+        return Err(crate::error::ApiError::BadRequest(
+            "`all: false` targets nothing".into(),
+        ));
+    }
+    let own = p.all == Some(true) || p.subject.as_ref().is_some_and(|s| s.as_str() == key);
+    if !own || !vti_oob_server::is_ed25519_did_key(key) {
+        return Ok(0);
+    }
+    let records = state.network.store.oob();
+    let at = delegation::delegation_key(key);
+    if records.get_raw(at.clone()).await?.is_none() {
+        return Ok(0);
+    }
+    records.remove(at).await?;
+    tracing::info!(key, reason = ?p.reason.as_deref(), "browser key signed out");
+    Ok(1)
 }
 
 /// Drop ended sign-in requests past their retention. Returns how many went.

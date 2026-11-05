@@ -73,8 +73,8 @@ impl VtnTasks {
     }
 }
 
-/// The policy each served specification declares: the `vtn/*` family, and `auth/oob/*`
-/// (`vti-specs-core`) for browser sign-in.
+/// The policy each served specification declares: the `vtn/*` family, and `auth/oob/*` and
+/// `auth/revoke-session` (`vti-specs-core`) for browser sign-in and sign-out.
 fn spec_policy_for(type_uri: &str) -> Option<SpecPolicy> {
     vti_specs_vtn::schema_index::spec_policy_for(type_uri)
         .or_else(|| vti_specs_core::schema_index::spec_policy_for(type_uri))
@@ -338,6 +338,9 @@ async fn route(call: &Call<'_>, doc: &TrustTask<Value>, type_uri: &str) -> Trust
         memberships::repudiate::v0_1::Payload => memberships_repudiate,
         memberships::leave::v0_1::Payload => memberships_leave,
         memberships::groups::add::v0_1::Payload => memberships_groups_add,
+    }
+    if type_uri == <oob::RevokeSession as trust_tasks_rs::Payload>::TYPE_URI {
+        return run::<oob::RevokeSession, _, _, _>(doc, |p| call.revoke_session(p)).await;
     }
     let served = vti_specs_vtn::schema_index::INDEX
         .iter()
@@ -949,6 +952,14 @@ impl Call<'_> {
     }
 
     // --------------------------------------------- this network as a member of a parent
+
+    /// `auth/revoke-session` `{ all: true }`, signed by a browser key: sign out. The key's
+    /// delegation goes, so nothing it signs is read as its approver's again.
+    async fn revoke_session(&self, p: oob::RevokeSession) -> ApiResult<Value> {
+        let key = self.signer()?;
+        let revoked = oob::revoke(self.state, key, &p).await?;
+        Ok(json!({ "revokedCount": revoked }))
+    }
 
     async fn memberships_list(&self, _: Nothing) -> ApiResult<Value> {
         self.admin()?;

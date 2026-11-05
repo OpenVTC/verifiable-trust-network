@@ -278,8 +278,10 @@
       open.onerror = () => reject(open.error);
     });
   }
+  // Resolves once the write has committed, so a reload right after sees it.
+  function done(tx) { return new Promise((resolve) => { tx.oncomplete = tx.onerror = tx.onabort = () => resolve(); }); }
   async function keep() {
-    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").put(Object.assign({ network: NETWORK }, signer), "k"); } catch {}
+    try { const d = await db(); const tx = d.transaction("key", "readwrite"); tx.objectStore("key").put(Object.assign({ network: NETWORK }, signer), "k"); await done(tx); } catch {}
   }
   async function restore() {
     try {
@@ -290,7 +292,7 @@
   }
   async function forget() {
     Object.assign(signer, { keypair: null, did: null, vm: null, approver: null, name: null, endsAt: 0 });
-    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").delete("k"); } catch {}
+    try { const d = await db(); const tx = d.transaction("key", "readwrite"); tx.objectStore("key").delete("k"); await done(tx); } catch {}
   }
 
   function signedIn() { return signer.approver && signer.endsAt * 1000 > Date.now(); }
@@ -326,7 +328,15 @@
     const box = $("session");
     if (!signedIn()) { box.classList.add("hidden"); return; }
     const out = el("button", { class: "copy", type: "button" }, "Sign out");
-    out.addEventListener("click", async () => { await forget(); location.reload(); });
+    out.addEventListener("click", async () => {
+      out.disabled = true;
+      // End the approval at the network too (auth/revoke-session, signed by this key), so
+      // the key reads nothing as its approver even if a copy survives. Best effort: the
+      // key is forgotten here either way, and the approval ends on its own clock.
+      try { await send(SPEC + "auth/revoke-session/0.2", { all: true, reason: "logout" }, true); } catch {}
+      await forget();
+      location.reload();
+    });
     const who = signer.name ? el("b", {}, signer.name) : el("span", { class: "did" }, signer.approver);
     box.replaceChildren(el("span", {}, "Signed in as"), who,
       el("span", {}, "until " + new Date(signer.endsAt * 1000).toLocaleTimeString()), out);

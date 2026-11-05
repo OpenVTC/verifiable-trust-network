@@ -32,7 +32,7 @@ Every request is a signed Trust Task document. The proof's signer is the caller.
 - `auth/oob/{request,claim,prove,respond,redeem,cancel}` lets a wallet approve a browser key.
 - `auth/signing-key/{enroll,authorize,list,revoke}` handles delegated keys.
 
-This replaces A13's `vtn-signin:` link. Built: the network serves `auth/oob/{request,claim,prove,respond,redeem,cancel}` through `vti-oob-server`, and a key `redeem` delegates signs as its approver only for `vtn/directory`, `vtn/graph`, `vtn/entries`, `vtn/roles` and `vtn/rooms/list`. The network's DID document advertises `TrustTaskHTTPS` (`{API_URL}/v1`) and `SignInPortal` (the landing page), so a wallet can find both.
+This replaces A13's `vtn-signin:` link. Built: the network serves `auth/oob/{request,claim,prove,respond,redeem,cancel}` through `vti-oob-server`, and a key `redeem` delegates signs as its approver only for `vtn/directory`, `vtn/graph`, `vtn/entries`, `vtn/roles` and `vtn/rooms/list`. Signing out is `auth/revoke-session/0.2` `{ all: true }`, signed by the browser key itself, which drops its delegation. The network's DID document advertises `TrustTaskHTTPS` (`{API_URL}/v1`) and `SignInPortal` (the landing page), so a wallet can find both.
 
 ## Trust Tasks are the API; credentials are the proof
 
