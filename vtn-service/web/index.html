@@ -585,6 +585,18 @@
     return { ok: false, status: res.status, code, error: body && body.payload, body };
   }
 
+  // The DIDs whose keys signed `proof`: one proof, or a proof set (e.g. Ed25519 plus ML-DSA).
+  function proofSigners(proof) {
+    return [].concat(proof || [])
+      .map((p) => p && typeof p.verificationMethod === "string" ? p.verificationMethod.split("#")[0] : null)
+      .filter(Boolean);
+  }
+  // `did` when one of the proofs is by it, otherwise the first signer (or null).
+  function signedBy(proof, did) {
+    const all = proofSigners(proof);
+    return all.includes(did) ? did : (all[0] || null);
+  }
+
   // A `vtn/*` read.
   function task(slug, payload = {}) { return send(`${SPEC}${slug}/0.1`, payload, false); }
 
@@ -1175,8 +1187,7 @@
     if (!r.ok) return "unreachable";
     const p = r.payload || {};
     const answer = p.answer || null;
-    const proof = answer && answer.proof;
-    const vm = proof && typeof proof.verificationMethod === "string" ? proof.verificationMethod.split("#")[0] : null;
+    const vm = answer ? signedBy(answer.proof, TR.did) : null;
     REG_VIA = { via: "relayed", signed: !!(vm && answer.issuer === TR.did && vm === TR.did), answer };
     if (!p.reachable) return "unreachable";
     if (p.member) return "member";
@@ -1200,8 +1211,7 @@
   async function askNetwork(did) {
     let r;
     try { r = await task("vtn/entries/show", { did }); } catch { return { kind: "error", why: "no answer" }; }
-    const proof = r.body && r.body.proof;
-    const signer = proof && typeof proof.verificationMethod === "string" ? proof.verificationMethod.split("#")[0] : null;
+    const signer = r.body ? signedBy(r.body.proof, NETWORK) : null;
     if (r.ok) return { kind: "entry", entry: r.payload.entry, signer, body: r.body };
     const reason = r.error && r.error.details && r.error.details.reason;
     if (reason === "not_found" || /notFound|notListed/.test(r.code)) return { kind: "notFound", signer, body: r.body };
@@ -1356,7 +1366,7 @@
     const now = Date.now();
     const from = Date.parse(c.validFrom), until = c.validUntil ? Date.parse(c.validUntil) : null;
     const window = (isNaN(from) || from <= now) && (until === null || until > now);
-    const proofBy = c.proof && typeof c.proof.verificationMethod === "string" ? c.proof.verificationMethod.split("#")[0] : null;
+    const proofBy = signedBy(c.proof, issuer);
     const ok = c.issuer === issuer && subjectOf(c) === subject && window && proofBy === issuer;
     rows.push([ok ? "pass" : "fail", label,
       `issued by ${c.issuer === issuer ? "the expected party" : c.issuer}, about ${subjectOf(c) === subject ? "the expected party" : subjectOf(c)}; ` +
