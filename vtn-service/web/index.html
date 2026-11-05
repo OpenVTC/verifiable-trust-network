@@ -175,6 +175,41 @@
   .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); color: var(--text); border-radius: var(--radius-sm);
     padding: 10px; overflow: auto; max-height: 260px; margin: 6px 0 0; }
   .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .verify { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 860px) { .verify { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; min-width: 0; }
+  .panel h2 { margin: 0 0 4px; font-size: 17px; }
+  .panel h3 { margin: 16px 0 6px; font-size: 14px; }
+  .panel > p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+  .did-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .did-form input { flex: 1 1 260px; min-width: 0; font: inherit; font-size: 14px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); }
+  .did-form input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  .verdict { display: flex; gap: 12px; align-items: flex-start; border-radius: 10px; padding: 12px 14px; margin: 14px 0 4px; }
+  .verdict b { display: block; font-size: 16px; }
+  .verdict span { font-size: 13px; color: var(--muted); }
+  .verdict i { flex: none; width: 12px; height: 12px; border-radius: 50%; margin-top: 5px; }
+  .v-member { background: var(--ok-soft); } .v-member i { background: var(--ok); }
+  .v-listed, .v-suspended { background: var(--warn-soft); } .v-listed i, .v-suspended i { background: var(--warn); }
+  .v-not { background: var(--surface-2); } .v-not i { background: var(--muted); }
+  .v-unknown { background: var(--info-soft); } .v-unknown i { background: var(--info); }
+  .disagree { background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 10px 14px; margin: 10px 0 0; font-weight: 600; font-size: 14px; }
+  ul.checks { list-style: none; margin: 8px 0 0; padding: 0; }
+  ul.checks li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 2px 8px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  ul.checks li:first-child { border-top: 0; }
+  ul.checks .mark { font-weight: 700; text-align: center; border-radius: 50%; width: 20px; height: 20px; line-height: 20px; font-size: 12px; }
+  ul.checks .pass .mark { background: var(--ok-soft); color: var(--ok); }
+  ul.checks .fail .mark { background: var(--bad-soft); color: var(--bad); }
+  ul.checks .unknown .mark { background: var(--surface-2); color: var(--muted); }
+  ul.checks .what { font-weight: 600; }
+  ul.checks .why { grid-column: 2; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .cmd { position: relative; font-family: var(--mono); font-size: 12px; background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px; margin: 6px 0; overflow-x: auto; white-space: pre; }
+  .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .facts .did { font-size: 12px; }
+  .rule { font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent); padding: 2px 0 2px 10px; margin: 14px 0 0; }
   dialog.cred { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border);
     border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
   dialog.cred::backdrop { background: rgba(0, 0, 0, .35); }
@@ -258,6 +293,10 @@
       <span class="chip"><span class="k">Governance</span> <a id="framework" href="#" rel="noopener">—</a></span>
       <span class="chip did-chip"><span class="k">DID</span> <span class="did" id="did" title="">—</span> <button class="copy" data-copy-from="did" type="button">Copy</button></span>
     </div>
+    <div class="hero-actions">
+      <button class="btn primary" type="button" id="check-open">Check membership</button>
+      <a class="btn" href="#verify" id="verify-open">How to verify this network</a>
+    </div>
   </header>
 
   <section class="stats" id="stats" aria-label="Network size"></section>
@@ -266,7 +305,31 @@
     <button type="button" role="tab" aria-selected="true" data-tab="directory">Directory</button>
     <button type="button" role="tab" aria-selected="false" data-tab="graph">Trust graph</button>
     <button type="button" role="tab" aria-selected="false" data-tab="invite" class="hidden" id="invite-tab">Invite</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="verify" id="verify-tab">Verify</button>
   </div>
+
+  <section id="verify" class="hidden" aria-label="Verify membership">
+    <div class="verify">
+      <div class="panel">
+        <h2>Verify a member</h2>
+        <p>Check whether a community or network is a member, from the evidence: the network's signed answer, the credentials it rests on, and the trust registry the network publishes to. No sign-in needed.</p>
+        <form class="did-form" id="verify-form" autocomplete="off">
+          <input id="verify-did" placeholder="did:webvh:…" spellcheck="false" aria-label="DID to verify" required>
+          <button class="btn primary" type="submit" id="verify-go">Verify</button>
+        </form>
+        <div id="verify-out" aria-live="polite"></div>
+      </div>
+      <aside class="panel" aria-label="About this network's trust">
+        <h2>About this network's trust</h2>
+        <dl class="facts" id="trust-facts"></dl>
+        <p class="rule">Listing is one-sided: an entry is a member only once it has acknowledged the network's listing (VTI-VTN-013). Anything that cannot be determined is indeterminate, never "not a member" (VTI-REG-012).</p>
+        <h3>Check it yourself</h3>
+        <p class="hint" style="font-size:13px;color:var(--muted);margin:0">Independent of this page: <code>nnm verify</code> resolves the network's and the member's DIDs itself and verifies every signature.</p>
+        <div class="cmd" id="cmd-nnm"></div>
+        <div id="cmd-trqp-wrap"><div class="cmd" id="cmd-trqp"></div></div>
+      </aside>
+    </div>
+  </section>
 
   <section id="invite" class="hidden" aria-label="Invite a community or network">
     <div class="invite">
@@ -372,6 +435,21 @@
       </div>
     </div>
   </section>
+
+  <dialog class="cred" id="check" aria-labelledby="check-title">
+    <div class="cred-head">
+      <h3 id="check-title">Check membership</h3>
+      <button class="btn ghost" type="button" id="check-close" aria-label="Close">Close</button>
+    </div>
+    <div class="cred-body">
+      <p id="check-intro">Is this DID a member of this network? Asked of the trust registry the network publishes to, directly from your browser, and of the network itself.</p>
+      <form class="did-form" id="check-form" autocomplete="off">
+        <input id="check-did" placeholder="did:webvh:…" spellcheck="false" aria-label="DID to check" required>
+        <button class="btn primary" type="submit" id="check-go">Check</button>
+      </form>
+      <div id="check-out" aria-live="polite"></div>
+    </div>
+  </dialog>
 
   <dialog class="cred" id="cred" aria-labelledby="cred-title">
     <div class="cred-head">
@@ -502,9 +580,9 @@
       body: JSON.stringify(doc),
     });
     const body = await res.json().catch(() => null);
-    if (body && body.type === type + "#response") return { ok: true, status: res.status, payload: body.payload };
+    if (body && body.type === type + "#response") return { ok: true, status: res.status, payload: body.payload, body };
     const code = body && body.payload && typeof body.payload.code === "string" ? body.payload.code : "http" + res.status;
-    return { ok: false, status: res.status, code, error: body && body.payload };
+    return { ok: false, status: res.status, code, error: body && body.payload, body };
   }
 
   // A `vtn/*` read.
@@ -701,6 +779,7 @@
       if (r.listingId) links.append(credLink(r, "listing", r.listingId, "Listing credential"));
       if (r.grantId) links.append(credLink(r, "grant", r.grantId, "Membership credential"));
       if (r.acknowledged) links.append(credLink(r, "acknowledgement", null, "Acknowledgement"));
+      links.append(el("a", { href: "#verify=" + encodeURIComponent(r.did) }, "Verify"));
     }
     li.append(links);
     return li;
@@ -810,6 +889,10 @@
       return;
     }
     showRestricted(visibility);
+    // An outsider can still verify: the tab bar holds Directory (this notice) and Verify.
+    RESTRICTED = true;
+    $("tabs").classList.remove("hidden");
+    document.querySelector('[data-tab="graph"]').classList.add("hidden");
   }
 
 
@@ -954,8 +1037,11 @@
     document.querySelectorAll("[data-tab]").forEach((o) => o.setAttribute("aria-selected", String(o === b)));
     const tab = b.dataset.tab;
     $("graph").classList.toggle("hidden", tab !== "graph");
-    $("directory").classList.toggle("hidden", tab !== "directory");
+    $("directory").classList.toggle("hidden", tab !== "directory" || RESTRICTED);
+    if (RESTRICTED) $("restricted").classList.toggle("hidden", tab !== "directory");
     $("invite").classList.toggle("hidden", tab !== "invite");
+    $("verify").classList.toggle("hidden", tab !== "verify");
+    if (tab === "verify") renderTrustFacts();
     if (tab === "graph") loadGraph();
   }));
   window.addEventListener("resize", () => { if (!$("graph").classList.contains("hidden")) renderGraph(); });
@@ -1046,6 +1132,308 @@
     $("inv-result").classList.remove("hidden");
   }
 
+  // ------------------------------------------------------------- verify (anyone)
+  // Third-party checks: the trust registry the network publishes to, asked directly from
+  // this browser (TRQP `POST <queryUrl>/authorization`), and the network's own signed
+  // answer and credentials. Signatures are checked by `nnm verify`, which resolves every
+  // DID itself; this page checks what it can without trusting this host for keys.
+  let TR = null;
+  let RESTRICTED = false;
+
+  function trAction(kind) {
+    const a = (TR && TR.actions) || {};
+    return kind === "member" ? (a.member || "member") : (a.listed || "lists");
+  }
+
+  // One TRQP authorization query: true, false (no record / not now), or null (no answer).
+  async function trqp(did, action) {
+    const base = TR.queryUrl.replace(/\/+$/, "");
+    let res;
+    try {
+      res = await fetch(base + "/authorization", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ authority_id: TR.authority || NETWORK, entity_id: did, action, resource: TR.resource || "vtn" }),
+      });
+    } catch { return null; }
+    if (res.status === 404) return false;
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    return body ? body.authorized === true : null;
+  }
+
+  // What the registry says: member | listed | notFound | unreachable | notPublished.
+  async function askRegistry(did) {
+    if (!TR || !TR.queryUrl || !safeHref(TR.queryUrl)) return "notPublished";
+    const member = await trqp(did, trAction("member"));
+    if (member === null) return "unreachable";
+    if (member) return "member";
+    const listed = await trqp(did, trAction("listed"));
+    if (listed === null) return "unreachable";
+    return listed ? "listed" : "notFound";
+  }
+
+  // What the network says, from its signed answer: { kind: entry|notFound|restricted|error }.
+  async function askNetwork(did) {
+    let r;
+    try { r = await task("vtn/entries/show", { did }); } catch { return { kind: "error", why: "no answer" }; }
+    const proof = r.body && r.body.proof;
+    const signer = proof && typeof proof.verificationMethod === "string" ? proof.verificationMethod.split("#")[0] : null;
+    if (r.ok) return { kind: "entry", entry: r.payload.entry, signer, body: r.body };
+    const reason = r.error && r.error.details && r.error.details.reason;
+    if (reason === "not_found" || /notFound|notListed/.test(r.code)) return { kind: "notFound", signer, body: r.body };
+    if (/permissionDenied|forbidden/.test(r.code)) return { kind: "restricted", signer, body: r.body };
+    return { kind: "error", why: (r.error && r.error.message) || r.code, body: r.body };
+  }
+
+  function networkSays(n) {
+    if (n.kind === "entry") {
+      const e = n.entry;
+      if (e.acknowledged) return "member";
+      if (e.state === "listed") return "listed";
+      if (e.state === "suspended") return "suspended";
+      return e.state;
+    }
+    return n.kind;
+  }
+
+  function agrees(net, reg) {
+    if (reg === "notPublished" || reg === "unreachable") return null;
+    const says = networkSays(net);
+    if (says === "restricted" || says === "error") return null;
+    if (says === "member") return reg === "member";
+    if (says === "listed") return reg === "listed" || (reg === "notFound" && (TR && TR.publishes) !== "members-and-listed");
+    return reg === "notFound";
+  }
+
+  const VERDICT = {
+    member: ["v-member", "Member", "Acknowledged: a member of this network."],
+    listed: ["v-listed", "Listed, not acknowledged", "Listed by the network, not yet acknowledged: not a member (VTI-VTN-013)."],
+    suspended: ["v-suspended", "Suspended", "A member whose membership is suspended."],
+    not: ["v-not", "Not a member", "Neither the network nor its registry holds it as a member."],
+    unknown: ["v-unknown", "Indeterminate", "Could not be determined. Indeterminate is never “not a member”."],
+  };
+
+  function verdictBox(key, extra) {
+    const [cls, title, text] = VERDICT[key];
+    return el("div", { class: "verdict " + cls }, el("i", { "aria-hidden": "true" }),
+      el("div", {}, el("b", {}, title), el("span", {}, extra || text)));
+  }
+
+  function regText(reg) {
+    return {
+      member: "holds a member record for it",
+      listed: "holds a listed (not acknowledged) record for it",
+      notFound: "holds no record for it",
+      unreachable: "could not be asked from this browser (unreachable, or it does not allow this site)",
+      notPublished: "this network publishes no trust registry",
+    }[reg];
+  }
+
+  function netText(n) {
+    switch (n.kind) {
+      case "entry": return { member: "acknowledged member", listed: "listed, not acknowledged", suspended: "suspended" }[networkSays(n)] || n.entry.state;
+      case "notFound": return "holds no published entry for it";
+      case "restricted": return "its directory is not public, so it does not say to outsiders";
+      default: return "did not answer (" + (n.why || "error") + ")";
+    }
+  }
+
+  // ---- the dialog: the registry's verdict first, then the network's, and whether they agree.
+  async function runCheck(did) {
+    const out = $("check-out");
+    out.replaceChildren(el("p", { class: "status waiting" }, "Checking…"));
+    const [reg, net] = await Promise.all([askRegistry(did), askNetwork(did)]);
+    const agree = agrees(net, reg);
+    let key;
+    if (agree === false) key = "unknown";
+    else if (reg === "member") key = "member";
+    else if (reg === "listed") key = "listed";
+    else if (reg === "notFound") key = networkSays(net) === "suspended" ? "suspended" : "not";
+    else {
+      // No registry answer: the network's signed answer, flagged as such.
+      const says = networkSays(net);
+      key = says === "member" ? "member" : says === "listed" ? "listed" : says === "suspended" ? "suspended" : says === "notFound" ? "not" : "unknown";
+    }
+    const lead = reg === "notPublished" ? "From the network's signed answer: this network publishes no trust registry."
+      : reg === "unreachable" ? "The trust registry could not be asked; this is the network's own answer."
+      : "The trust registry " + regText(reg) + ".";
+    const facts = el("dl", { class: "facts" },
+      el("dt", {}, "Trust registry"), el("dd", {}, regText(reg)),
+      el("dt", {}, "The network"), el("dd", {}, netText(net)),
+      el("dt", {}, "Agree"), el("dd", {}, agree === null ? "—" : agree ? "Yes" : "No"));
+    const kids = [verdictBox(key, agree === false ? undefined : lead), facts];
+    if (agree === false) kids.push(el("p", { class: "disagree", role: "alert" }, "The network and its trust registry disagree. Rely on neither until it is resolved."));
+    const full = el("a", { class: "btn", href: "#verify=" + encodeURIComponent(did) }, "Full verification");
+    full.addEventListener("click", () => $("check").close());
+    kids.push(el("div", { class: "cred-actions" }, full));
+    out.replaceChildren(...kids);
+  }
+
+  function openCheck(did) {
+    const dlg = $("check");
+    $("check-intro").textContent = TR && TR.queryUrl
+      ? "Is this DID a member of this network? Asked of its trust registry, directly from your browser, and of the network itself."
+      : "Is this DID a member of this network? This network publishes no trust registry, so the answer is the network's own signed one.";
+    $("check-out").replaceChildren();
+    if (did) $("check-did").value = did;
+    if (!dlg.open) dlg.showModal();
+    if (did) runCheck(did);
+  }
+
+  // ---- the Verify tab: credential by credential.
+  async function statusBit(credential) {
+    // VTN-issued credentials carry this network's Bitstring Status Lists, fetched here.
+    const entries = [].concat(credential.credentialStatus || []);
+    if (!entries.length) return "valid";
+    let state = "valid";
+    for (const s of entries) {
+      let url;
+      try { url = new URL(s.statusListCredential, location.href); } catch { return "unknown"; }
+      if (url.origin !== location.origin) return "unknown";
+      let list;
+      try { list = await (await fetch(url.href, { headers: { Accept: "application/json" } })).json(); } catch { return "unknown"; }
+      if (!list || list.issuer !== credential.issuer) return "unknown";
+      const enc = list.credentialSubject && list.credentialSubject.encodedList;
+      if (typeof enc !== "string" || enc[0] !== "u" || typeof DecompressionStream === "undefined") return "unknown";
+      try {
+        const b64 = enc.slice(1).replace(/-/g, "+").replace(/_/g, "/");
+        const raw = Uint8Array.from(atob(b64 + "=".repeat((4 - b64.length % 4) % 4)), (c) => c.charCodeAt(0));
+        const bytes = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+        const i = Number(s.statusListIndex);
+        const set = (bytes[i >> 3] & (0x80 >> (i % 8))) !== 0;
+        if (set && s.statusPurpose === "revocation") return "revoked";
+        if (set && s.statusPurpose === "suspension") state = "suspended";
+      } catch { return "unknown"; }
+    }
+    return state;
+  }
+
+  function subjectOf(c) {
+    const s = c && c.credentialSubject;
+    return s && (s.id || (Array.isArray(s) && s[0] && s[0].id)) || null;
+  }
+
+  async function credentialChecks(label, c, issuer, subject, statusFrom) {
+    const rows = [];
+    if (!c) { rows.push(["fail", label, "missing"]); return rows; }
+    const now = Date.now();
+    const from = Date.parse(c.validFrom), until = c.validUntil ? Date.parse(c.validUntil) : null;
+    const window = (isNaN(from) || from <= now) && (until === null || until > now);
+    const proofBy = c.proof && typeof c.proof.verificationMethod === "string" ? c.proof.verificationMethod.split("#")[0] : null;
+    const ok = c.issuer === issuer && subjectOf(c) === subject && window && proofBy === issuer;
+    rows.push([ok ? "pass" : "fail", label,
+      `issued by ${c.issuer === issuer ? "the expected party" : c.issuer}, about ${subjectOf(c) === subject ? "the expected party" : subjectOf(c)}; ` +
+      `valid from ${c.validFrom || "?"}${c.validUntil ? " until " + c.validUntil : ""}${window ? "" : " (outside its validity window)"}; ` +
+      (proofBy === issuer ? "proof by the issuer's key (signature verified by nnm verify)" : "no proof by the issuer")]);
+    const st = await statusFrom(c);
+    rows.push([st === "valid" ? "pass" : st === "unknown" ? "unknown" : "fail", label + " status",
+      { valid: "not revoked or suspended", revoked: "revoked", suspended: "suspended", unknown: "could not be checked here", unchecked: "not checked by the network" }[st] || st]);
+    return rows;
+  }
+
+  async function runVerify(did) {
+    const out = $("verify-out");
+    out.replaceChildren(el("p", { class: "status waiting" }, "Verifying…"));
+    const [reg, net] = await Promise.all([askRegistry(did), askNetwork(did)]);
+    const rows = [];
+    // 1. The network's answer, and whose key signed it.
+    if (net.kind === "entry" || net.kind === "notFound") {
+      rows.push([net.signer === NETWORK ? "pass" : "fail", "The network's answer",
+        net.signer === NETWORK ? "signed by the network's DID (" + NETWORK + "): " + netText(net) : "not signed by the network's DID"]);
+    } else {
+      rows.push(["unknown", "The network's answer", netText(net)]);
+    }
+    let ackStatus = null;
+    if (net.kind === "entry") {
+      const e = net.entry;
+      if (e.acknowledged) {
+        const g = await task("vtn/graph/show", {});
+        const edge = g.ok && e.acknowledgement && g.payload.graph.edges.find((x) => x.role === "acknowledgement" && x.id === e.acknowledgement.id);
+        ackStatus = edge ? edge.status : null;
+      }
+      rows.push(...await credentialChecks("Listing (network → party)", e.listing, NETWORK, did, statusBit));
+      if (e.acknowledged || e.grant) {
+        rows.push(...await credentialChecks("Membership grant (network → party)", e.grant, NETWORK, did, statusBit));
+        rows.push(...await credentialChecks("Acknowledgement (party → network)", e.acknowledgement, did, NETWORK,
+          async () => ackStatus || "unknown"));
+      }
+    }
+    // 2. The registry.
+    const agree = agrees(net, reg);
+    rows.push([reg === "notPublished" || reg === "unreachable" ? "unknown" : agree === false ? "fail" : "pass",
+      "Trust registry", regText(reg) + (TR && TR.queryUrl ? " (" + TR.queryUrl + ", asked from this browser)" : "")]);
+
+    const failed = rows.some((x) => x[0] === "fail");
+    const revoked = rows.some((x) => x[0] === "fail" && /status$/.test(x[1]) && /revoked/.test(x[2]));
+    let key;
+    if (agree === false) key = "unknown";
+    else if (net.kind === "entry") {
+      const says = networkSays(net);
+      key = revoked ? "not" : failed ? "unknown" : says === "member" ? "member" : says === "listed" ? "listed" : says === "suspended" ? "suspended" : "not";
+    } else if (net.kind === "notFound") key = reg === "unreachable" ? "unknown" : "not";
+    else key = reg === "member" ? "member" : reg === "listed" ? "listed" : reg === "notFound" ? "not" : "unknown";
+
+    const list = el("ul", { class: "checks" }, ...rows.map(([o, what, why]) =>
+      el("li", { class: o }, el("span", { class: "mark", "aria-label": o }, o === "pass" ? "✓" : o === "fail" ? "✕" : "?"),
+        el("span", { class: "what" }, what), el("span", { class: "why" }, why))));
+    const kids = [verdictBox(key), list];
+    if (agree === false) kids.splice(1, 0, el("p", { class: "disagree", role: "alert" }, "The network and its trust registry disagree. Rely on neither until it is resolved."));
+    if (net.kind === "restricted") kids.push(el("p", { class: "rule" }, "This network's directory is not public: an outsider can check the trust registry, but not the entry or its credentials. A member or administrator signs in to see them."));
+    const raw = el("details", { class: "detail" }, el("summary", {}, "The network's raw answer"), el("pre", {}, JSON.stringify(net.body || null, null, 2)));
+    kids.push(raw);
+    out.replaceChildren(...kids);
+    renderCommands(did);
+  }
+
+  function renderCommands(did) {
+    const d = did || "<did>";
+    $("cmd-nnm").textContent = `nnm verify ${location.origin} ${d} \\\n  --expect ${NETWORK || "<network did>"}`;
+    const wrap = $("cmd-trqp-wrap");
+    if (TR && TR.queryUrl) {
+      wrap.classList.remove("hidden");
+      $("cmd-trqp").textContent = `curl -s -X POST ${TR.queryUrl.replace(/\/+$/, "")}/authorization \\\n  -H 'content-type: application/json' \\\n  -d '${JSON.stringify({ authority_id: TR.authority || NETWORK, entity_id: d, action: trAction("member"), resource: TR.resource || "vtn" })}'`;
+    } else wrap.classList.add("hidden");
+  }
+
+  function renderTrustFacts() {
+    const fw = ($("framework").textContent || "").trim();
+    const facts = [
+      ["Network DID", el("span", { class: "did" }, NETWORK || "—")],
+      ["Governance", fw || "—"],
+      ["Directory", VISIBILITY === "public" ? "public" : VISIBILITY === "admins" ? "administrators only" : "members only"],
+      ["Trust registry", TR && TR.did ? el("span", { class: "did" }, TR.did) : "none published"],
+    ];
+    if (TR) {
+      facts.push(["Publishes", TR.publishes === "members-and-listed" ? "members, and listed parties (as “listed”)" : "acknowledged members only"]);
+      if (TR.queryUrl) facts.push(["Query", el("span", { class: "did" }, TR.queryUrl)]);
+      facts.push(["Records", el("span", { class: "did" }, `(party, ${TR.authority || NETWORK}, ${trAction("member")}, ${TR.resource || "vtn"})`)]);
+    }
+    const evidence = el("span", {});
+    if (VISIBILITY === "public") evidence.append(el("a", { href: "/v1/index" }, "Signed index"), " · ");
+    evidence.append(el("a", { href: "/v1/status/revocation" }, "Revocation list"), " · ",
+      el("a", { href: "/v1/status/suspension" }, "Suspension list"), " · ", el("a", { href: "/.well-known/vtn" }, "Profile"));
+    facts.push(["Evidence", evidence]);
+    $("trust-facts").replaceChildren(...facts.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+    renderCommands($("verify-did").value.trim() || null);
+  }
+
+  function showVerify(did) {
+    document.querySelector('[data-tab="verify"]').click();
+    $("tabs").classList.remove("hidden");
+    if (did) { $("verify-did").value = did; runVerify(did); }
+    $("verify").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // `#check=<did>` opens the dialog and runs it; `#verify=<did>` (or `#verify`) the tab.
+  function routeHash() {
+    const h = location.hash;
+    const arg = (p) => decodeURIComponent(h.slice(p.length)).trim();
+    if (h.startsWith("#check")) openCheck(h.startsWith("#check=") ? arg("#check=") : "");
+    else if (h.startsWith("#verify")) showVerify(h.startsWith("#verify=") ? arg("#verify=") : "");
+  }
+  window.addEventListener("hashchange", routeHash);
+
   async function init() {
     const { body: info } = await get("/.well-known/vtn");
     if (info) {
@@ -1064,6 +1452,7 @@
       NETWORK = info.did || null;
       SIGN_IN = info.signIn || null;
       ROLES = Array.isArray(info.roles) ? info.roles : [];
+      TR = info.trustRegistry && typeof info.trustRegistry === "object" ? info.trustRegistry : null;
     }
     await restore();
     sessionBar();
@@ -1079,6 +1468,7 @@
     renderStats(summary.ok ? summary.payload.summary : null);
     await loadDirectory(visibility);
     await enableInvite();
+    routeHash();
     if (location.hash.startsWith("#graph")) {
       document.querySelector('[data-tab="graph"]').click();
       if (location.hash === "#graph-expanded") { await loadGraph(); await expandAll(); }
@@ -1099,6 +1489,11 @@
   bindSeg("kind", "kind");
   $("wallet-sign-in").addEventListener("click", startSignIn);
   $("invite-form").addEventListener("submit", invite);
+  $("check-open").addEventListener("click", () => openCheck($("check-did").value.trim()));
+  $("check-close").addEventListener("click", () => $("check").close());
+  $("check").addEventListener("click", (e) => { if (e.target === $("check")) $("check").close(); });
+  $("check-form").addEventListener("submit", (e) => { e.preventDefault(); const d = $("check-did").value.trim(); if (d) runCheck(d); });
+  $("verify-form").addEventListener("submit", (e) => { e.preventDefault(); const d = $("verify-did").value.trim(); if (d) runVerify(d); });
   $("cred-close").addEventListener("click", () => $("cred").close());
   $("cred").addEventListener("click", (e) => { if (e.target === $("cred")) $("cred").close(); });
   $("cred-copy").addEventListener("click", async () => {
