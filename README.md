@@ -92,6 +92,10 @@ cargo run --bin vtn -- serve
 nnm networks add dev http://127.0.0.1:8400
 ```
 
+## Verifying membership
+
+Anyone can check who is or isn't a member, without trusting the network's word. Use the landing page's **Check membership** and **Verify** tab, or `nnm verify <url> <did>`, which needs no admin key and verifies every signature itself. You can also query the trust registry over TRQP, or check the credentials with any VC tool. See [`docs/verifying.md`](docs/verifying.md).
+
 ## NNM
 
 ```sh
@@ -100,6 +104,7 @@ nnm networks add <name> <url> | list | use <name> | remove <name>
 nnm status
 nnm entries [<did>]
 nnm list <did> --kind community|network [--label <label>] [--description …] [--url …] [--tag …]
+nnm verify <url> <did> [--expect <network did>] [--registry <url>] [--json]   # anyone; exit 0 member, 1 not, 2 indeterminate
 nnm invite <did> [--kind community|network] [--label …] [--console <vtc url>] [--url …]   # list, then print the invitation
 nnm profile <did> [--label …] [--description …] [--url …] [--tag …]
 nnm directory [terms…] [--kind community|network] [--members-only] [--federated]

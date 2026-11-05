@@ -64,6 +64,26 @@ enum Command {
         #[command(flatten)]
         profile: ProfileArgs,
     },
+    /// Check, as a third party, whether `did` is a member of the network at `url`: the
+    /// network's signed answer, every credential against its issuer's resolved keys and
+    /// status lists, and the trust registry the network publishes to. Needs no admin key.
+    /// Exits 0 for a member, 1 for not a member, 2 when it cannot be determined.
+    Verify {
+        /// The network's URL.
+        url: String,
+        /// The DID to check.
+        did: String,
+        /// The DID the network must answer as. Without it, whatever `url` answers as.
+        #[arg(long)]
+        expect: Option<String>,
+        /// The trust registry's TRQP query URL. Default: the one the network's profile
+        /// names.
+        #[arg(long)]
+        registry: Option<String>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Invite a community or network: list it (unless it is listed already), then print
     /// the invitation its administrator accepts. A community accepts in its operator
     /// console (Networks, Join), which `--console` links to directly.
@@ -306,6 +326,33 @@ async fn main() -> anyhow::Result<()> {
     let mut profile = Profile::load(&path)?;
 
     match cli.command {
+        Command::Verify {
+            url,
+            did,
+            expect,
+            registry,
+            json,
+        } => {
+            let resolver = VmKeyResolver::network(cli.resolver_url.as_deref()).await?;
+            let verifier = nnm_cli::verify::Verifier::new(
+                reqwest::Client::new(),
+                std::sync::Arc::new(resolver),
+            );
+            let report = verifier
+                .verify(
+                    &url,
+                    &did,
+                    expect.as_deref(),
+                    registry.map(|query_url| nnm_cli::verify::RegistryTarget { query_url }),
+                )
+                .await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.to_text());
+            }
+            std::process::exit(report.verdict.exit_code());
+        }
         Command::Keys(cmd) => keys(cmd, &mut profile, &path),
         Command::Networks(cmd) => networks(cmd, &mut profile, &path).await,
         command => {
@@ -944,7 +991,9 @@ async fn admin_command(
             }
             Ok(())
         }
-        Command::Keys(_) | Command::Networks(_) => unreachable!("handled above"),
+        Command::Keys(_) | Command::Networks(_) | Command::Verify { .. } => {
+            unreachable!("handled above")
+        }
     }
 }
 
