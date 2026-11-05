@@ -104,7 +104,10 @@
   .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); border-radius: 8px; padding: 10px;
     overflow: auto; max-height: 260px; margin: 6px 0 0; }
   .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
-  .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .session { font-size: 13px; color: var(--muted); margin: 14px 0 18px; padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface); display: flex; gap: 4px 10px; align-items: center; flex-wrap: wrap; }
+  .session > * { min-width: 0; }
+  .session b { color: var(--text); font-weight: 600; }
   .signin { margin-top: 12px; }
   .signin .link { font-family: var(--mono); font-size: 12px; word-break: break-all; background: var(--bg);
     border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
@@ -275,8 +278,10 @@
       open.onerror = () => reject(open.error);
     });
   }
+  // Resolves once the write has committed, so a reload right after sees it.
+  function done(tx) { return new Promise((resolve) => { tx.oncomplete = tx.onerror = tx.onabort = () => resolve(); }); }
   async function keep() {
-    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").put(Object.assign({ network: NETWORK }, signer), "k"); } catch {}
+    try { const d = await db(); const tx = d.transaction("key", "readwrite"); tx.objectStore("key").put(Object.assign({ network: NETWORK }, signer), "k"); await done(tx); } catch {}
   }
   async function restore() {
     try {
@@ -287,7 +292,7 @@
   }
   async function forget() {
     Object.assign(signer, { keypair: null, did: null, vm: null, approver: null, name: null, endsAt: 0 });
-    try { const d = await db(); d.transaction("key", "readwrite").objectStore("key").delete("k"); } catch {}
+    try { const d = await db(); const tx = d.transaction("key", "readwrite"); tx.objectStore("key").delete("k"); await done(tx); } catch {}
   }
 
   function signedIn() { return signer.approver && signer.endsAt * 1000 > Date.now(); }
@@ -323,9 +328,18 @@
     const box = $("session");
     if (!signedIn()) { box.classList.add("hidden"); return; }
     const out = el("button", { class: "copy", type: "button" }, "Sign out");
-    out.addEventListener("click", async () => { await forget(); location.reload(); });
-    box.replaceChildren("Signed in as ", el("b", {}, signer.name || signer.approver), " until ",
-      new Date(signer.endsAt * 1000).toLocaleTimeString(), out);
+    out.addEventListener("click", async () => {
+      out.disabled = true;
+      // End the approval at the network too (auth/revoke-session, signed by this key), so
+      // the key reads nothing as its approver even if a copy survives. Best effort: the
+      // key is forgotten here either way, and the approval ends on its own clock.
+      try { await send(SPEC + "auth/revoke-session/0.2", { all: true, reason: "logout" }, true); } catch {}
+      await forget();
+      location.reload();
+    });
+    const who = signer.name ? el("b", {}, signer.name) : el("span", { class: "did" }, signer.approver);
+    box.replaceChildren(el("span", {}, "Signed in as"), who,
+      el("span", {}, "until " + new Date(signer.endsAt * 1000).toLocaleTimeString()), out);
     box.classList.remove("hidden");
   }
 
