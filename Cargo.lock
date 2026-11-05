@@ -4165,16 +4165,24 @@ version = "0.1.0"
 dependencies = [
  "affinidi-secrets-resolver",
  "anyhow",
+ "axum",
+ "chrono",
  "clap",
  "getrandom 0.4.3",
+ "rcgen",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "trql-client",
  "trust-tasks-rs",
+ "uuid",
  "vti-specs-vtn",
  "vti-vtn",
+ "vtn-service",
 ]
 
 [[package]]
