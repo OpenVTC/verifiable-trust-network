@@ -51,6 +51,8 @@ base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
+# Trust-registry queries (TRQP over Trust Tasks, HTTPS binding): `nnm registry`.
+trql-client = { version = "0.31", default-features = false, features = ["https"] }
 getrandom = "0.4"
 multibase = "0.9"
 # The landing page's sign-in link as a QR code. SVG only, as the VTC's.

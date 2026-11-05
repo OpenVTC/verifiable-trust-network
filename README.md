@@ -34,6 +34,7 @@ Phase 1 of the delivery plan, implemented:
 - **Roles, groups and broadcast.** The network defines roles (`[[roles]]`, e.g. `admins`). Members register a group per role, and `required` roles gate admission. `nnm broadcast --role admins …` reaches every registered group. Member communities receive it as `vtc/networks/deliver` and pass it to the group's members. Member networks receive it as `vtn/relay/deliver` and relay into their own members' groups, one signed hop at a time, without sharing rosters. Receipts come back up the chain.
 - **Network rooms.** `[[rooms]]` opens a room for a role. A person in any group registered for that role, directly or through member networks, gets a short-lived room pass by presenting their group evidence.
 - **Trust graph.** The landing page's *Trust graph* tab draws the DTG graph from the credentials, and member networks expand in place.
+- **Trust registry.** `[registry]` projects membership to a trust registry as TRQP records (`member` on `vtn`, under the network's DID as authority, A22), reconciled at start (adding existing members), after every change and on an interval. The profile and the DID document (`TrustRegistry` referral) say where to ask; `nnm registry status|check|records` asks the registry itself. Writes need DIDComm/TSP, not built yet (`docs/trust-registry.md`).
 - **Landing page and directory.** Served at `/`: the network's profile, member counts, and a searchable directory (by name, tags, description or DID; filterable by kind and acknowledgement). `[directory] visibility` is `public`, `members` or `admins`. A public directory is read with unsigned Trust Tasks. For a restricted one, a member community or network, or an administrator, signs in from a wallet: the wallet approves the page's own key (`auth/oob/*`, A13), which then reads as them for up to `[auth] browser_key_hours`. A person presenting a membership credential from a member community reads with their own tools.
 
 Not yet built (see the design's delivery plan):
@@ -119,6 +120,7 @@ nnm suspend|reinstate|remove <did> [--reason <text>]
 nnm graph [--include-exited] [--out graph.json]
 nnm index                     # public directories only (A21)
 nnm audit
+nnm registry status | check <did> | records   # asked of the trust registry, not the network (A22)
 ```
 
 ## API
@@ -163,6 +165,7 @@ A listed party signs its acknowledgement and repudiation with
 | `deny.toml` | cargo-deny policy, shared with the VTI workspace |
 | `.github/` | CI (fmt, clippy `-D warnings`, test, MSRV, cargo-deny), Dependabot, PR template, DCO |
 | `templates/vtn-host.json` | The VTA DID template a network is provisioned from |
+| `docs/trust-registry.md` | Publishing membership to a trust registry, and checking it |
 | `CLAUDE.md` | Working notes for AI-assisted development |
 
 ## Test

@@ -52,6 +52,7 @@ pub struct VtnStore {
     outbox: KeyspaceHandle,
     accepted_ids: KeyspaceHandle,
     oob: KeyspaceHandle,
+    registry: KeyspaceHandle,
 }
 
 const NEXT_INDEX: &str = "next";
@@ -73,6 +74,7 @@ impl VtnStore {
             outbox: store.keyspace("outbox")?,
             accepted_ids: store.keyspace("accepted_ids")?,
             oob: store.keyspace("oob")?,
+            registry: store.keyspace("registry")?,
         })
     }
 
@@ -261,6 +263,12 @@ impl VtnStore {
     /// The accepted-document-id record (`crate::tasks::accepted`).
     pub fn accepted_ids(&self) -> &KeyspaceHandle {
         &self.accepted_ids
+    }
+
+    /// The trust-registry projection: what was written, and the last reconcile
+    /// (`crate::registry`).
+    pub fn registry(&self) -> &KeyspaceHandle {
+        &self.registry
     }
 
     /// Browser sign-in requests and the delegations they arm (`crate::tasks::oob`).

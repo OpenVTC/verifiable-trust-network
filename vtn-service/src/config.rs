@@ -59,6 +59,40 @@ pub struct Config {
     /// Where the provisioned identity's keys are kept. Required with `[identity]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsConfig>,
+    /// The trust registry this network's membership is projected to (A22,
+    /// `docs/trust-registry.md`). Absent: no projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistryConfig>,
+}
+
+/// `[registry]`: where this network's membership is published as TRQP records, so a
+/// verifier can ask "is X a member of this network?" of the registry it already trusts,
+/// without asking the network (design §7, A22).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryConfig {
+    /// The registry's DID: the registry authoritative for this network. The network's DID
+    /// document names it (`TrustRegistry` referral) and every record names this network as
+    /// its authority.
+    pub did: String,
+    /// The `https://` base of the registry's public query surface (TRQP REST
+    /// `/authorization`, the Trust Task HTTPS binding `/trust-tasks`), advertised in the
+    /// network profile so a verifier and the landing page can query it directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_url: Option<String>,
+    /// What is published: `members` (acknowledged entries only, the default: a listing
+    /// is not membership, VTI-VTN-013) or `members-and-listed` (also listed parties, under
+    /// their own action).
+    #[serde(default)]
+    pub publish: crate::registry::Publish,
+    /// How often the whole projection is reconciled against the registry, in seconds. A
+    /// lifecycle change is projected at once; the reconcile catches anything missed.
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval_secs: u64,
+}
+
+fn default_sync_interval() -> u64 {
+    3600
 }
 
 /// Browser sign-in: a wallet approves the landing page's key (`auth/oob/*`).
@@ -273,6 +307,25 @@ impl Config {
                 "auth: browser_key_hours must be 1..=24 (A20), not {}",
                 self.auth.browser_key_hours
             ));
+        }
+        if let Some(registry) = &self.registry {
+            if !registry.did.starts_with("did:") {
+                errors.push(format!("registry: did {:?} is not a DID", registry.did));
+            }
+            if let Some(url) = &registry.query_url
+                && crate::registry::origin_of(url).is_none()
+            {
+                errors.push(format!(
+                    "registry: query_url {url:?} must be an https:// URL (the registry's public \
+                     query base, e.g. https://registry.example.org)"
+                ));
+            }
+            if registry.sync_interval_secs < 60 {
+                errors.push(format!(
+                    "registry: sync_interval_secs must be at least 60, not {}",
+                    registry.sync_interval_secs
+                ));
+            }
         }
         if !(1..=24 * 7).contains(&self.relay.ttl_hours) {
             errors.push(format!(

@@ -64,6 +64,13 @@ retry_base_seconds = 30    # first retry delay; doubles each attempt, capped at 
 
 # Rooms the network opens for a role. A person gets a short-lived pass by presenting their
 # group's membership credential and the chain of group registrations up to this network.
+# Publish membership to a trust registry as TRQP records (A22, docs/trust-registry.md).
+# [registry]
+# did = "did:webvh:QmRegistry:registry.example.org"
+# query_url = "https://registry.example.org"   # its public query base, advertised
+# publish = "members"                          # or "members-and-listed"
+# sync_interval_secs = 3600
+
 [[rooms]]
 id = "pandemic"
 name = "Pandemic Response"

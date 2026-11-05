@@ -31,6 +31,8 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+# `nnm registry`: TRQP queries to the trust registry over its HTTPS binding.
+trql-client = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

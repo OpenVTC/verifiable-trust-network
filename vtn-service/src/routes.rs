@@ -47,6 +47,8 @@ pub struct AppState {
     pub accepted: StoreAcceptedIds,
     /// Browser sign-in settings.
     pub sign_in: crate::config::AuthConfig,
+    /// The trust registry membership is projected to, if any (`crate::registry`).
+    pub registry: Option<crate::config::RegistryConfig>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -138,21 +140,34 @@ async fn ready(State(s): State<AppState>) -> Response {
     }
 }
 
-async fn landing() -> Response {
+async fn landing(State(s): State<AppState>) -> Response {
     let mut res = Html(LANDING_PAGE).into_response();
-    res.headers_mut().insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-             connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; \
-             frame-ancestors 'none'",
-        ),
-    );
+    if let Ok(policy) = HeaderValue::from_str(&landing_policy(s.registry.as_ref())) {
+        res.headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, policy);
+    }
     res
 }
 
+/// The landing page's CSP. With a trust registry whose query surface is advertised, the
+/// page may also reach that origin, so a visitor checks a record with the registry itself
+/// rather than taking this network's word for it (the registry must allow this network's
+/// origin in its `CORS_ALLOWED_ORIGINS`).
+pub fn landing_policy(registry: Option<&crate::config::RegistryConfig>) -> String {
+    let registry_origin = registry
+        .and_then(|r| r.query_url.as_deref())
+        .and_then(crate::registry::origin_of)
+        .map(|o| format!(" {o}"))
+        .unwrap_or_default();
+    format!(
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+         connect-src 'self'{registry_origin}; img-src 'self' data:; base-uri 'none'; \
+         form-action 'none'; frame-ancestors 'none'"
+    )
+}
+
 async fn profile(State(s): State<AppState>) -> Json<Value> {
-    Json(json!({
+    let mut profile = json!({
         "did": s.network.did(),
         "profile": s.network.profile,
         "roles": s.network.roles(),
@@ -172,7 +187,13 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
             "index": "/v1/index",
             "status": "/v1/status/{purpose}",
         },
-    }))
+    });
+    // Where a verifier checks membership without asking this network (A22). Absent when
+    // no registry is configured.
+    if let Some(registry) = &s.registry {
+        profile["trustRegistry"] = crate::registry::profile_json(registry, s.network.did());
+    }
+    Json(profile)
 }
 
 /// Which sign-in request a QR code is for: its id and claim deadline, as

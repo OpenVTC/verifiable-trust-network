@@ -113,6 +113,12 @@ pub struct SetupInputs {
     pub membership: MembershipConfig,
     #[serde(default)]
     pub directory: DirectoryConfig,
+    /// The trust registry this network publishes its membership to (`[registry]` in
+    /// `vtn.toml`, `docs/trust-registry.md`). Its DID is also named in the network's DID
+    /// document, as a `TrustRegistry` referral, so a verifier holding only the network's
+    /// DID finds it.
+    #[serde(default)]
+    pub trust_registry: Option<crate::config::RegistryConfig>,
 }
 
 fn default_context() -> String {
@@ -160,6 +166,11 @@ impl SetupInputs {
         if self.context.trim().is_empty() {
             errors.push("context must not be empty".into());
         }
+        if let Some(registry) = &self.trust_registry
+            && let Err(e) = vta_sdk::did_templates::referral_service(&registry.did)
+        {
+            errors.push(format!("trust_registry.did: {e}"));
+        }
         if matches!(self.secrets.backend, Some(SecretBackend::ConfigSeed)) {
             errors.push(
                 "secrets.backend = \"config_seed\" would keep the identity's keys in vtn.toml"
@@ -206,6 +217,16 @@ impl SetupInputs {
             if let Some(value) = value {
                 vars.insert(key.to_string(), Value::String(value.clone()));
             }
+        }
+        // The registry referral (TRQP v2: "machine-discoverable via the authority_id").
+        // Validated with the rest of the setup file, so it renders.
+        if let Some(registry) = &self.trust_registry
+            && let Ok(service) = vta_sdk::did_templates::referral_service(&registry.did)
+        {
+            vars.insert(
+                vta_sdk::did_templates::TRUST_REGISTRY_SERVICE_VAR.to_string(),
+                service,
+            );
         }
         let mut ask = ProvisionAsk::for_template(&self.template, vars, &self.context)
             .with_label("vtn-service");
@@ -300,6 +321,7 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
             context: inputs.context.clone(),
         }),
         secrets: Some(inputs.secrets.clone()),
+        registry: inputs.trust_registry.clone(),
     };
     config.validate()?;
     if let Some(parent) = inputs
@@ -469,6 +491,36 @@ mod tests {
         let err = SetupInputs::from_toml_str(&raw).unwrap_err().to_string();
         assert!(err.contains("admins"), "{err}");
         assert!(err.contains("base_url"), "{err}");
+    }
+
+    #[test]
+    fn a_trust_registry_is_named_in_the_did_document_and_the_config() {
+        let inputs = SetupInputs::from_toml_str(&format!(
+            "{SETUP}\n[trust_registry]\ndid = \"did:webvh:QmTR:registry.example\"\n\
+             query_url = \"https://registry.example\"\n"
+        ))
+        .unwrap();
+        let ask = inputs.ask();
+        let service = &ask.integration_template_vars["SERVICE_TRUST_REGISTRY"];
+        assert_eq!(service["type"], "TrustRegistry");
+        assert_eq!(
+            service["serviceEndpoint"]["uri"],
+            "did:webvh:QmTR:registry.example"
+        );
+        // Without one, the slot is left out and the template prunes it.
+        let plain = SetupInputs::from_toml_str(SETUP).unwrap().ask();
+        assert!(
+            !plain
+                .integration_template_vars
+                .contains_key("SERVICE_TRUST_REGISTRY")
+        );
+        // An https URL would read as this network serving TRQP itself.
+        let err = SetupInputs::from_toml_str(&format!(
+            "{SETUP}\n[trust_registry]\ndid = \"https://registry.example\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("trust_registry.did"), "{err}");
     }
 
     #[test]

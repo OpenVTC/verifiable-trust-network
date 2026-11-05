@@ -2,6 +2,7 @@
 //! Networks, as `pnm` is for a person and `cnm` for a community.
 
 mod profile;
+mod registry;
 
 use std::path::PathBuf;
 
@@ -157,6 +158,9 @@ enum Command {
     /// This network's memberships of other networks.
     #[command(subcommand)]
     Memberships(MembershipsCommand),
+    /// What the trust registry says about this network's members, asked of the registry.
+    #[command(subcommand)]
+    Registry(registry::RegistryCommand),
     /// Suspend a member.
     Suspend {
         did: String,
@@ -754,6 +758,17 @@ async fn admin_command(
             Ok(())
         }
         Command::Memberships(cmd) => memberships(&nnm, cmd).await,
+        Command::Registry(cmd) => {
+            let entries = match cmd {
+                registry::RegistryCommand::Records => Some(
+                    nnm.call::<specs::listings::list::v0_1::Payload>(json!({}))
+                        .await?["entries"]
+                        .clone(),
+                ),
+                _ => None,
+            };
+            registry::run(&info, entries, cmd).await
+        }
         Command::Rooms => {
             let answer = nnm
                 .call::<specs::rooms::list::v0_1::Payload>(json!({}))

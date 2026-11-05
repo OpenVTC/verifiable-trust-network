@@ -4177,6 +4177,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "trql-client",
  "trust-tasks-rs",
  "uuid",
  "vti-specs-vtn",
@@ -6464,6 +6465,23 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "trql-client"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daa9c0797f0fb87fc89b734ae0ce7daf9276abd1e052b51521438c6e4b4a1798"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
