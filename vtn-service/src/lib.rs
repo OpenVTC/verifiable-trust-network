@@ -14,6 +14,7 @@ pub mod federation;
 pub mod groups;
 pub mod identity;
 pub mod memberships;
+pub mod messaging;
 pub mod network;
 pub mod registry;
 pub mod rooms;

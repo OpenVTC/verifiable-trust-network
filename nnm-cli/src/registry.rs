@@ -1,7 +1,7 @@
 //! `nnm registry …`: what the trust registry says about this network's members, asked of
 //! the registry itself (TRQP over its HTTPS binding, `trql-client`), never of the network.
 //!
-//! The network advertises where to ask in its profile (`trustRegistry`, A22). Every answer
+//! The network advertises where to ask in its profile (`trustRegistry`, A23). Every answer
 //! must name this network as its authority (`TrqlClient::referred_by`), so a registry
 //! answering for someone else is refused rather than believed.
 

@@ -188,7 +188,7 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
             "status": "/v1/status/{purpose}",
         },
     });
-    // Where a verifier checks membership without asking this network (A22). Absent when
+    // Where a verifier checks membership without asking this network (A23). Absent when
     // no registry is configured.
     if let Some(registry) = &s.registry {
         profile["trustRegistry"] = crate::registry::profile_json(registry, s.network.did());

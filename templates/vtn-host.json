@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "vtn-host",
   "kind": "vtn-host",
-  "description": "Verifiable Trust Network (VTN) service identity, for the vtn binary. A VTN curates a set of communities and networks (dtgwg-vti-spec 11a-vtn.md) and is provisioned on a VTA, from which it derives its identity (VTI-VTN-001). Declares an Ed25519 key (#key-0), which is assertionMethod and authentication: it signs listings, membership grants, the network index and status lists. Also declares an X25519 key-agreement key (#key-1). Advertises the VTN API at API_URL (no trailing slash): `VerifiableTrustNetwork` and `TrustTaskHTTPS` (the Trust-Task base; requests go to {API_URL}/v1/trust-tasks) at {API_URL}/v1, `SignInPortal` (the landing page, where a wallet sign-in starts) at {API_URL}/, and `LinkedDomains` at API_URL. URL or WEBVH_SERVER is still required at provision time, so that the VTA knows where to publish the did:webvh log. Optionally advertises a TrustRegistry referral naming the registry this network publishes its membership to, by DID (SERVICE_TRUST_REGISTRY, built by vta_sdk::did_templates::referral_service; `trust_registry` in the vtn setup file), so a verifier holding only the network's DID resolves one hop to the registry (TRQP v2: machine-discoverable via the authority_id) and then confirms the registry answers for this network. Omitted, it is pruned.",
+  "description": "Verifiable Trust Network (VTN) service identity, for the vtn binary. A VTN curates a set of communities and networks (dtgwg-vti-spec 11a-vtn.md) and is provisioned on a VTA, from which it derives its identity (VTI-VTN-001). Declares an Ed25519 key (#key-0), which is assertionMethod and authentication: it signs listings, membership grants, the network index and status lists. Also declares an X25519 key-agreement key (#key-1). Advertises the VTN API at API_URL (no trailing slash): `VerifiableTrustNetwork` and `TrustTaskHTTPS` (the Trust-Task base; requests go to {API_URL}/v1/trust-tasks) at {API_URL}/v1, `SignInPortal` (the landing page, where a wallet sign-in starts) at {API_URL}/, and `LinkedDomains` at API_URL. URL or WEBVH_SERVER is still required at provision time, so that the VTA knows where to publish the did:webvh log. Optionally advertises a TrustRegistry referral naming the registry this network publishes its membership to, by DID (SERVICE_TRUST_REGISTRY, built by vta_sdk::did_templates::referral_service; `trust_registry` in the vtn setup file), so a verifier holding only the network's DID resolves one hop to the registry (TRQP v2: machine-discoverable via the authority_id) and then confirms the registry answers for this network. Omitted, it is pruned. Optionally advertises a DIDCommMessaging service routing through the network's mediator (SERVICE_DIDCOMM, built by vta_sdk::did_templates::didcomm_service; `[messaging] mediator_did` in the vtn setup file), for what the network sends over DIDComm, such as its trust-registry records: the registry and the mediator reach it by resolving this DID. The X25519 key (#key-1) is what that session encrypts with. Omitted, it is pruned.",
   "methods": [
     "webvh"
   ],
@@ -12,7 +12,8 @@
   "optionalVars": {
     "URL": null,
     "WEBVH_SERVER": null,
-    "SERVICE_TRUST_REGISTRY": null
+    "SERVICE_TRUST_REGISTRY": null,
+    "SERVICE_DIDCOMM": null
   },
   "defaults": {
     "preRotationCount": 2,
@@ -68,7 +69,8 @@
         "type": "LinkedDomains",
         "serviceEndpoint": "{API_URL}"
       },
-      "{SERVICE_TRUST_REGISTRY}"
+      "{SERVICE_TRUST_REGISTRY}",
+      "{SERVICE_DIDCOMM}"
     ]
   }
 }

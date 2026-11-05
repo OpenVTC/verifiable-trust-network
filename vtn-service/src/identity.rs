@@ -87,6 +87,28 @@ struct StoredKeys {
 const KEYS_VERSION: u32 = 1;
 
 /// The provisioned identity's keys; `None` when nothing is stored yet.
+/// The provisioned identity's keys as messaging secrets (its Ed25519 key and its X25519
+/// key-agreement key), for its mediator session. `None` without an `[identity]`.
+pub async fn session_secrets(
+    config: &Config,
+) -> anyhow::Result<Option<Vec<affinidi_secrets_resolver::secrets::Secret>>> {
+    let Some(provisioned) = &config.identity else {
+        return Ok(None);
+    };
+    let secrets = config
+        .secrets
+        .as_ref()
+        .context("[identity] needs a [secrets] store")?;
+    let store = vti_secrets::create_seed_store(secrets, &config.data_dir)
+        .map_err(|e| anyhow::anyhow!("open the secret store: {e}"))?;
+    let bundle = load_keys(&*store)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("{} has no keys in the secret store", provisioned.did))?;
+    let secrets = vta_sdk::did_key::secrets_from_bundle(&bundle)
+        .map_err(|e| anyhow::anyhow!("identity keys: {e}"))?;
+    Ok(Some(secrets))
+}
+
 pub async fn load_keys(store: &dyn SeedStore) -> anyhow::Result<Option<DidSecretsBundle>> {
     let Some(bytes) = store
         .get()

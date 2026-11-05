@@ -35,7 +35,12 @@ visibility = "members"         # "public" | "members" | "admins"
 # DID document as a TrustRegistry referral (docs/trust-registry.md).
 # [trust_registry]
 # did = "did:webvh:QmRegistry:registry.example.org"
-# query_url = "https://registry.example.org"
+# query_url = "https://registry.example.org"   # only if it serves HTTPS queries
+
+# The network's mediator: written to [messaging], and advertised in the DID document as a
+# DIDCommMessaging service. The network writes its registry records over this session.
+# [messaging]
+# mediator_did = "did:webvh:QmMediator:mediator.example.org"
 
 [network]
 name        = "World Health Network"

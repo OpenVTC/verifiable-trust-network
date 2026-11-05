@@ -119,6 +119,11 @@ pub struct SetupInputs {
     /// DID finds it.
     #[serde(default)]
     pub trust_registry: Option<crate::config::RegistryConfig>,
+    /// The network's mediator session (`[messaging]` in `vtn.toml`): what it sends over
+    /// DIDComm, such as its trust-registry records. The network's DID document then
+    /// advertises a `DIDCommMessaging` service routing through `mediator_did`.
+    #[serde(default)]
+    pub messaging: Option<crate::config::MessagingConfig>,
 }
 
 fn default_context() -> String {
@@ -170,6 +175,11 @@ impl SetupInputs {
             && let Err(e) = vta_sdk::did_templates::referral_service(&registry.did)
         {
             errors.push(format!("trust_registry.did: {e}"));
+        }
+        if let Some(messaging) = &self.messaging
+            && let Err(e) = vta_sdk::did_templates::didcomm_service(&messaging.mediator_did)
+        {
+            errors.push(format!("messaging.mediator_did: {e}"));
         }
         if matches!(self.secrets.backend, Some(SecretBackend::ConfigSeed)) {
             errors.push(
@@ -225,6 +235,15 @@ impl SetupInputs {
         {
             vars.insert(
                 vta_sdk::did_templates::TRUST_REGISTRY_SERVICE_VAR.to_string(),
+                service,
+            );
+        }
+        // DIDComm through the network's mediator. Validated with the rest of the setup file.
+        if let Some(messaging) = &self.messaging
+            && let Ok(service) = vta_sdk::did_templates::didcomm_service(&messaging.mediator_did)
+        {
+            vars.insert(
+                vta_sdk::did_templates::DIDCOMM_SERVICE_VAR.to_string(),
                 service,
             );
         }
@@ -322,6 +341,7 @@ pub async fn run_from_file(path: &Path) -> anyhow::Result<()> {
         }),
         secrets: Some(inputs.secrets.clone()),
         registry: inputs.trust_registry.clone(),
+        messaging: inputs.messaging.clone(),
     };
     config.validate()?;
     if let Some(parent) = inputs
@@ -521,6 +541,33 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("trust_registry.did"), "{err}");
+    }
+
+    #[test]
+    fn a_mediator_is_named_in_the_did_document_and_the_config() {
+        let inputs = SetupInputs::from_toml_str(&format!(
+            "{SETUP}\n[messaging]\nmediator_did = \"did:webvh:QmMed:mediator.example\"\n"
+        ))
+        .unwrap();
+        let ask = inputs.ask();
+        let service = &ask.integration_template_vars["SERVICE_DIDCOMM"];
+        assert_eq!(service["type"], "DIDCommMessaging");
+        assert_eq!(
+            inputs.messaging.as_ref().unwrap().mediator_did,
+            "did:webvh:QmMed:mediator.example"
+        );
+        let plain = SetupInputs::from_toml_str(SETUP).unwrap().ask();
+        assert!(
+            !plain
+                .integration_template_vars
+                .contains_key("SERVICE_DIDCOMM")
+        );
+        let err = SetupInputs::from_toml_str(&format!(
+            "{SETUP}\n[messaging]\nmediator_did = \"wss://mediator.example\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("messaging.mediator_did"), "{err}");
     }
 
     #[test]

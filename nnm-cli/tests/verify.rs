@@ -60,6 +60,7 @@ async fn network(visibility: Visibility) -> Net {
         rooms: vec![],
         identity: None,
         secrets: None,
+        messaging: None,
         registry: None,
     };
     vtn_service::init_dev(&config).unwrap();

@@ -59,15 +59,35 @@ pub struct Config {
     /// Where the provisioned identity's keys are kept. Required with `[identity]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsConfig>,
-    /// The trust registry this network's membership is projected to (A22,
+    /// The trust registry this network's membership is projected to (A23,
     /// `docs/trust-registry.md`). Absent: no projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryConfig>,
+    /// The network's own mediator session (DIDComm), for what it sends: its trust-registry
+    /// records (`docs/trust-registry.md`). Absent: the network sends nothing over DIDComm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messaging: Option<MessagingConfig>,
+}
+
+/// The network's DIDComm session through its mediator.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MessagingConfig {
+    /// The mediator the network's DID document routes DIDComm through: the `uri` of its
+    /// `DIDCommMessaging` service. The mediator must accept this network's DID.
+    pub mediator_did: String,
+    /// How long to wait for an answer to a request, in seconds.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
+}
+
+fn default_request_timeout() -> u64 {
+    20
 }
 
 /// `[registry]`: where this network's membership is published as TRQP records, so a
 /// verifier can ask "is X a member of this network?" of the registry it already trusts,
-/// without asking the network (design §7, A22).
+/// without asking the network (design §7, A23).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryConfig {
@@ -324,6 +344,27 @@ impl Config {
                 errors.push(format!(
                     "registry: sync_interval_secs must be at least 60, not {}",
                     registry.sync_interval_secs
+                ));
+            }
+        }
+        if let Some(messaging) = &self.messaging {
+            if !messaging.mediator_did.starts_with("did:") {
+                errors.push(format!(
+                    "messaging: mediator_did {:?} is not a DID",
+                    messaging.mediator_did
+                ));
+            }
+            if self.identity.is_none() {
+                errors.push(
+                    "messaging: needs a provisioned [identity]: the session uses its key-agreement \
+                     key, which a development did:key does not have"
+                        .into(),
+                );
+            }
+            if !(1..=300).contains(&messaging.request_timeout_secs) {
+                errors.push(format!(
+                    "messaging: request_timeout_secs must be 1..=300, not {}",
+                    messaging.request_timeout_secs
                 ));
             }
         }

@@ -79,14 +79,53 @@ async fn main() -> anyhow::Result<()> {
             state
                 .network
                 .spawn_retry_worker(std::time::Duration::from_secs(15));
-            // The trust-registry projection: reconciled now (which adds existing members),
-            // after every entry change, and every `sync_interval_secs`.
+            // The network's mediator session (`[messaging]`): what it sends over DIDComm.
+            let (stop, stopped) = tokio::sync::watch::channel(false);
+            let session = match &config.messaging {
+                Some(messaging) => {
+                    let secrets = vtn_service::identity::session_secrets(&config)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("[messaging] needs a provisioned [identity]")
+                        })?;
+                    let session = vtn_service::messaging::start(
+                        state.network.did(),
+                        secrets,
+                        messaging,
+                        config.resolver_url.as_deref(),
+                        stopped.clone(),
+                    )
+                    .await?;
+                    tracing::info!(mediator = %messaging.mediator_did, "mediator session starting");
+                    Some(session)
+                }
+                None => None,
+            };
+            // The trust-registry projection: reconciled once the writer can write (which adds
+            // existing members), after every entry change, and every `sync_interval_secs`.
             if let Some(registry) = &config.registry {
-                let syncer = std::sync::Arc::new(vtn_service::registry::Syncer::new(
+                let writer: std::sync::Arc<dyn vtn_service::registry::RegistryWriter> =
+                    match (&session, &config.messaging) {
+                        (Some(session), Some(messaging)) => {
+                            std::sync::Arc::new(vtn_service::registry::MessagingWriter::new(
+                                state.network.clone(),
+                                std::sync::Arc::new(session.requester.clone()),
+                                registry.did.clone(),
+                                messaging.mediator_did.clone(),
+                                std::time::Duration::from_secs(messaging.request_timeout_secs),
+                            ))
+                        }
+                        _ => std::sync::Arc::new(vtn_service::registry::NoWriteTransport),
+                    };
+                let mut syncer = vtn_service::registry::Syncer::new(
                     state.network.clone(),
-                    std::sync::Arc::new(vtn_service::registry::NoWriteTransport),
+                    writer,
                     registry.clone(),
-                ));
+                );
+                if let Some(session) = &session {
+                    syncer = syncer.with_ready(session.connected.clone());
+                }
+                let syncer = std::sync::Arc::new(syncer);
                 tracing::info!(
                     registry = %registry.did,
                     publish = registry.publish.as_str(),
@@ -120,6 +159,15 @@ async fn main() -> anyhow::Result<()> {
                 let _ = tokio::signal::ctrl_c().await;
             })
             .await?;
+            // Close the mediator session, so its one slot at the mediator is freed.
+            let _ = stop.send(true);
+            if let Some(session) = session
+                && tokio::time::timeout(std::time::Duration::from_secs(10), session.task)
+                    .await
+                    .is_err()
+            {
+                tracing::warn!("the mediator session did not close within 10s");
+            }
         }
     }
     Ok(())

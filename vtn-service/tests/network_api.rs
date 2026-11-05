@@ -104,6 +104,7 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         rooms: vec![],
         identity: None,
         secrets: None,
+        messaging: None,
         registry: None,
     }
 }

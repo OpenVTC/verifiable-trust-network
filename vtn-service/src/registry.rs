@@ -1,4 +1,4 @@
-//! The network's membership, projected to a trust registry as TRQP records (design §7, A22,
+//! The network's membership, projected to a trust registry as TRQP records (design §7, A23,
 //! `docs/trust-registry.md`).
 //!
 //! A verifier that already trusts a registry asks it "has this network authorised X as a
@@ -8,7 +8,7 @@
 //! (WHN → Health-AU → St Vincent's) is answered by the network's own federated directory,
 //! not the registry.
 //!
-//! # Record shape (A22)
+//! # Record shape (A23)
 //!
 //! | TRQP | Value |
 //! |---|---|
@@ -26,10 +26,10 @@
 //!
 //! Records are written through a [`RegistryWriter`]. The Affinidi registry accepts record
 //! writes (`registry/record/put`, `/delete`) over DIDComm or TSP only, from a DID in its
-//! `ADMIN_DIDS`; its HTTPS binding is read-only. This network has no mediator session yet, so
-//! the production writer is [`NoWriteTransport`]: the projection is computed and reported,
-//! and nothing is written, until a messaging writer is plugged in here. Reads (checking a
-//! record) work over HTTPS today (`nnm registry check`, the landing page's Verify tab).
+//! `ADMIN_DIDS`; its HTTPS binding is read-only. With `[messaging]` the writer is
+//! [`MessagingWriter`]: signed `registry/record/*` Trust Tasks over the network's own DIDComm
+//! session ([`crate::messaging`]). Without it, [`NoWriteTransport`]: the projection is
+//! computed and reported, and nothing is written.
 //!
 //! # Sync
 //!
@@ -57,11 +57,11 @@ use vti_vtn::model::{Entry, EntryState, Framework};
 use crate::config::RegistryConfig;
 use crate::network::Network;
 
-/// The TRQP `resource` every record of this network is published under (A22).
+/// The TRQP `resource` every record of this network is published under (A23).
 pub const RESOURCE: &str = "vtn";
-/// The TRQP `action` of an acknowledged entry: membership (A22).
+/// The TRQP `action` of an acknowledged entry: membership (A23).
 pub const MEMBER_ACTION: &str = "member";
-/// The TRQP `action` of a listed, unacknowledged entry, when published (A22).
+/// The TRQP `action` of a listed, unacknowledged entry, when published (A23).
 pub const LISTED_ACTION: &str = "lists";
 
 /// What the network publishes.
@@ -112,6 +112,7 @@ impl Record {
             "authorityId": authority,
             "action": self.action,
             "resource": RESOURCE,
+            "recordType": "authorization",
             "recognized": false,
             "authorized": true,
             "context": self.context,
@@ -224,6 +225,191 @@ impl RegistryWriter for NoWriteTransport {
     }
     fn describe(&self) -> String {
         "none (no DIDComm or TSP session)".into()
+    }
+}
+
+/// `registry/record/put/0.3`, `delete/0.2` and `query/0.3`: the versions whose records carry
+/// a validity window (affinidi-trust-registry-rs 0.29 and later).
+pub const RECORD_PUT: &str = "https://trusttasks.org/spec/registry/record/put/0.3";
+pub const RECORD_DELETE: &str = "https://trusttasks.org/spec/registry/record/delete/0.2";
+pub const RECORD_QUERY: &str = "https://trusttasks.org/spec/registry/record/query/0.3";
+
+/// Writes and lists records with signed `registry/record/*` Trust Tasks over the network's
+/// DIDComm session. Each request names the registry as recipient, carries an `issuedAt`, and
+/// is signed for `authentication` by the network's key, which is what the registry checks
+/// before it takes a write from a DID in its `ADMIN_DIDS`. The registry signs every answer.
+pub struct MessagingWriter {
+    network: Arc<Network>,
+    requester: Arc<dyn crate::messaging::Exchange>,
+    registry_did: String,
+    mediator_did: String,
+    timeout: Duration,
+}
+
+/// What the registry answered.
+enum Answer {
+    Ok(Value),
+    Refused { code: String, message: String },
+}
+
+impl MessagingWriter {
+    pub fn new(
+        network: Arc<Network>,
+        requester: Arc<dyn crate::messaging::Exchange>,
+        registry_did: String,
+        mediator_did: String,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            network,
+            requester,
+            registry_did,
+            mediator_did,
+            timeout,
+        }
+    }
+
+    /// Send `payload` as `type_uri`, signed, and return the registry's whole answer document.
+    pub async fn ask(&self, type_uri: &str, payload: Value) -> Result<Value, WriteError> {
+        let document = json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": type_uri,
+            "issuer": self.network.did(),
+            "recipient": self.registry_did,
+            "issuedAt": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "payload": payload,
+        });
+        let signed = self
+            .network
+            .identity
+            .sign_document_for(document, vti_vtn::verify::AUTHENTICATION)
+            .await
+            .map_err(|e| WriteError::Unreachable(format!("sign the request: {e}")))?;
+        self.requester
+            .request(&self.registry_did, signed, self.timeout)
+            .await
+            .map_err(|e| WriteError::Unreachable(e.to_string()))
+    }
+
+    async fn call(&self, type_uri: &str, payload: Value) -> Result<Answer, WriteError> {
+        let answer = self.ask(type_uri, payload).await?;
+        let kind = answer
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let body = answer.get("payload").cloned().unwrap_or(Value::Null);
+        if kind == format!("{type_uri}#response") {
+            return Ok(Answer::Ok(body));
+        }
+        let code = body
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let message = body
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Ok(Answer::Refused { code, message })
+    }
+}
+
+fn refused(code: &str, message: &str) -> WriteError {
+    if message.is_empty() {
+        WriteError::Refused(code.to_string())
+    } else {
+        WriteError::Refused(format!("{code}: {message}"))
+    }
+}
+
+#[async_trait]
+impl RegistryWriter for MessagingWriter {
+    async fn put(&self, authority: &str, record: &Record) -> Result<(), WriteError> {
+        match self
+            .call(
+                RECORD_PUT,
+                json!({ "record": record.trust_record(authority) }),
+            )
+            .await?
+        {
+            Answer::Ok(_) => Ok(()),
+            Answer::Refused { code, message } => Err(refused(&code, &message)),
+        }
+    }
+
+    async fn delete(
+        &self,
+        authority: &str,
+        entity_id: &str,
+        action: &str,
+    ) -> Result<(), WriteError> {
+        let payload = json!({
+            "entityId": entity_id,
+            "authorityId": authority,
+            "action": action,
+            "resource": RESOURCE,
+        });
+        match self.call(RECORD_DELETE, payload).await? {
+            Answer::Ok(_) => Ok(()),
+            // Already gone is what a delete wants.
+            Answer::Refused { code, .. } if code.ends_with(":notFound") => Ok(()),
+            Answer::Refused { code, message } => Err(refused(&code, &message)),
+        }
+    }
+
+    async fn list(&self, authority: &str) -> Result<Option<Vec<Held>>, WriteError> {
+        let mut held = Vec::new();
+        let mut cursor: Option<String> = None;
+        // Bounded: 200 pages of 200 is far more than any network lists.
+        for _ in 0..200 {
+            let mut payload =
+                json!({ "authorityId": authority, "resource": RESOURCE, "limit": 200 });
+            if let Some(c) = &cursor {
+                payload["cursor"] = json!(c);
+            }
+            let body = match self.call(RECORD_QUERY, payload).await? {
+                Answer::Ok(body) => body,
+                Answer::Refused { code, .. } if code.ends_with(":notFound") => break,
+                Answer::Refused { code, message } => return Err(refused(&code, &message)),
+            };
+            for r in body
+                .get("records")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let (Some(entity), Some(action)) = (
+                    r.get("entityId").and_then(Value::as_str),
+                    r.get("action").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                held.push(Held {
+                    entity_id: entity.to_string(),
+                    action: action.to_string(),
+                    context: r.get("context").cloned().unwrap_or(Value::Null),
+                });
+            }
+            match body.get("nextCursor").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+        Ok(Some(held))
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "DIDComm to {} through {}{}",
+            self.registry_did,
+            self.mediator_did,
+            if self.requester.is_connected() {
+                ""
+            } else {
+                " (not connected yet)"
+            }
+        )
     }
 }
 
@@ -353,7 +539,14 @@ pub struct Syncer {
     config: RegistryConfig,
     state: KeyspaceHandle,
     running: Mutex<()>,
+    /// Whether the writer's transport is up, when it has one: a reconcile waits for it.
+    ready: Option<tokio::sync::watch::Receiver<bool>>,
 }
+
+/// First wait before retrying a reconcile that could not write everything.
+const RETRY_BASE: Duration = Duration::from_secs(30);
+/// Longest such wait (the interval is the other bound).
+const RETRY_CAP: Duration = Duration::from_secs(600);
 
 impl Syncer {
     pub fn new(
@@ -368,7 +561,15 @@ impl Syncer {
             config,
             state,
             running: Mutex::new(()),
+            ready: None,
         }
+    }
+
+    /// Reconcile only while `ready` is true (the writer's session is connected), and again
+    /// each time it comes back.
+    pub fn with_ready(mut self, ready: tokio::sync::watch::Receiver<bool>) -> Self {
+        self.ready = Some(ready);
+        self
     }
 
     pub fn writer(&self) -> &dyn RegistryWriter {
@@ -519,17 +720,49 @@ impl Syncer {
     pub fn spawn(self: Arc<Self>) {
         let nudge = self.network.registry_nudge.clone();
         let interval = Duration::from_secs(self.config.sync_interval_secs.max(60));
+        let mut ready = self.ready.clone();
         tokio::spawn(async move {
+            let mut retry = RETRY_BASE;
             loop {
-                if let Err(e) = self.reconcile().await {
-                    tracing::warn!(error = %e, "trust registry reconcile failed");
+                // A session writer can do nothing until its session is up.
+                if let Some(ready) = ready.as_mut()
+                    && ready.wait_for(|up| *up).await.is_err()
+                {
+                    return;
                 }
+                let complete = match self.reconcile().await {
+                    Ok(report) => report.blocked.is_none() && report.failed.is_empty(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "trust registry reconcile failed");
+                        false
+                    }
+                };
+                // An incomplete reconcile is retried sooner than the interval, backing off.
+                let wait = if complete {
+                    retry = RETRY_BASE;
+                    interval
+                } else {
+                    let w = retry.min(interval);
+                    retry = (retry * 2).min(RETRY_CAP);
+                    w
+                };
+                let reconnected = async {
+                    match ready.as_mut() {
+                        // Lost, then back: reconcile what was missed.
+                        Some(ready) => {
+                            let _ = ready.wait_for(|up| !*up).await;
+                            let _ = ready.wait_for(|up| *up).await;
+                        }
+                        None => std::future::pending::<()>().await,
+                    }
+                };
                 tokio::select! {
                     () = nudge.notified() => {
                         // Let a burst of changes settle into one reconcile.
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
-                    () = tokio::time::sleep(interval) => {}
+                    () = tokio::time::sleep(wait) => {}
+                    () = reconnected => {}
                 }
             }
         });

@@ -1,4 +1,4 @@
-//! The trust-registry projection (A22): what the network publishes, how it follows the
+//! The trust-registry projection (A23): what the network publishes, how it follows the
 //! lifecycle, the backfill of existing members, stale records, retries, and what the
 //! profile and landing page advertise.
 
@@ -63,6 +63,7 @@ async fn network(registry: Option<RegistryConfig>) -> (tempfile::TempDir, AppSta
         rooms: vec![],
         identity: None,
         secrets: None,
+        messaging: None,
         registry,
     };
     config.validate().unwrap();
@@ -398,4 +399,224 @@ fn a_registry_must_be_named_by_did_and_queried_over_https() {
     assert!(err.contains("is not a DID"), "{err}");
     assert!(err.contains("must be an https:// URL"), "{err}");
     assert!(err.contains("at least 60"), "{err}");
+}
+
+/// A registry reached over the session: it checks each request as the Affinidi registry does
+/// (named as recipient, issued by the sender, signed for `authentication` by it, the sender
+/// in `ADMIN_DIDS`, writing under its own authority) and answers with signed documents.
+struct SessionRegistry {
+    me: Identity,
+    admins: std::sync::Mutex<Vec<String>>,
+    records: std::sync::Mutex<std::collections::BTreeMap<(String, String, String), Value>>,
+    seen: std::sync::Mutex<Vec<Value>>,
+}
+
+impl SessionRegistry {
+    fn new(admin: &str) -> Self {
+        Self {
+            me: Identity::generate(),
+            admins: std::sync::Mutex::new(vec![admin.to_string()]),
+            records: Default::default(),
+            seen: Default::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl vtn_service::messaging::Exchange for SessionRegistry {
+    async fn request(
+        &self,
+        peer: &str,
+        document: Value,
+        _timeout: std::time::Duration,
+    ) -> Result<Value, vtn_service::messaging::RequestError> {
+        assert_eq!(peer, REGISTRY_DID);
+        self.seen.lock().unwrap().push(document.clone());
+        let issuer = document["issuer"].as_str().unwrap().to_string();
+        assert_eq!(document["recipient"], REGISTRY_DID);
+        assert!(document["issuedAt"].is_string());
+        vti_vtn::verify::verify_document(
+            &document,
+            &issuer,
+            vti_vtn::verify::AUTHENTICATION,
+            &VtaKeyResolver::offline(),
+        )
+        .await
+        .expect("a request signed for authentication by its issuer");
+        let type_uri = document["type"].as_str().unwrap().to_string();
+        let p = &document["payload"];
+        let (kind, payload) = if !self.admins.lock().unwrap().contains(&issuer) {
+            (
+                "error",
+                serde_json::json!({ "code": "permissionDenied", "message": "not an admin" }),
+            )
+        } else if type_uri.contains("/record/put/") {
+            let r = &p["record"];
+            assert_eq!(
+                r["authorityId"],
+                issuer.as_str(),
+                "writes under its own authority"
+            );
+            assert_eq!(r["recordType"], "authorization");
+            let key = (
+                r["entityId"].as_str().unwrap().to_string(),
+                r["action"].as_str().unwrap().to_string(),
+                r["resource"].as_str().unwrap().to_string(),
+            );
+            let created = self
+                .records
+                .lock()
+                .unwrap()
+                .insert(key, r.clone())
+                .is_none();
+            (
+                "ok",
+                serde_json::json!({ "ok": true, "wasCreated": created }),
+            )
+        } else if type_uri.contains("/record/delete/") {
+            let key = (
+                p["entityId"].as_str().unwrap().to_string(),
+                p["action"].as_str().unwrap().to_string(),
+                p["resource"].as_str().unwrap().to_string(),
+            );
+            match self.records.lock().unwrap().remove(&key) {
+                Some(_) => ("ok", serde_json::json!({ "ok": true })),
+                None => (
+                    "error",
+                    serde_json::json!({ "code": "registry/record/delete:notFound" }),
+                ),
+            }
+        } else if type_uri.contains("/record/query/") {
+            let records: Vec<Value> = self
+                .records
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|r| r["authorityId"] == p["authorityId"])
+                .cloned()
+                .collect();
+            ("ok", serde_json::json!({ "records": records }))
+        } else {
+            panic!("unexpected {type_uri}");
+        };
+        let answer = serde_json::json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": if kind == "ok" { format!("{type_uri}#response") } else {
+                "https://trusttasks.org/spec/trust-task-error/0.1".to_string() },
+            "threadId": document["id"],
+            "issuer": self.me.did(),
+            "recipient": issuer,
+            "issuedAt": Utc::now().to_rfc3339(),
+            "payload": payload,
+        });
+        Ok(self
+            .me
+            .sign_document_for(answer, vti_vtn::verify::AUTHENTICATION)
+            .await
+            .unwrap())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+}
+
+fn session_syncer(state: &AppState, registry_: &Arc<SessionRegistry>) -> Syncer {
+    let writer = vtn_service::registry::MessagingWriter::new(
+        state.network.clone(),
+        registry_.clone(),
+        REGISTRY_DID.into(),
+        "did:web:mediator.example".into(),
+        std::time::Duration::from_secs(5),
+    );
+    Syncer::new(
+        state.network.clone(),
+        Arc::new(writer),
+        registry(Publish::Members),
+    )
+}
+
+/// Over the session: the backfill writes signed `registry/record/put/0.3` requests the
+/// registry accepts, a departure deletes the record, and the registry's own list is what
+/// the reconcile compares against. Without the network in `ADMIN_DIDS`, every write is
+/// refused and reported, and retried once it is added.
+#[tokio::test]
+async fn records_are_written_as_signed_trust_tasks_over_the_session() {
+    let (_dir, state) = network(Some(registry(Publish::Members))).await;
+    let net = state.network.did().to_string();
+    let (msf, au) = (Identity::generate(), Identity::generate());
+    member_of(&state, &msf, "MSF").await;
+    member_of(&state, &au, "Health-AU").await;
+
+    let reg = Arc::new(SessionRegistry::new("did:web:someone-else"));
+    let sync = session_syncer(&state, &reg);
+    let refused = sync.reconcile().await.unwrap();
+    // Not an admin: the registry refuses even the listing, and nothing is written.
+    assert!(
+        refused
+            .blocked
+            .as_deref()
+            .is_some_and(|b| b.contains("permissionDenied")),
+        "{refused:?}"
+    );
+    assert!(reg.records.lock().unwrap().is_empty());
+
+    reg.admins.lock().unwrap().push(net.clone());
+    let report = sync.reconcile().await.unwrap();
+    assert_eq!(report.put.len(), 2, "{report:?}");
+    assert!(
+        report.failed.is_empty() && report.blocked.is_none(),
+        "{report:?}"
+    );
+    let types: Vec<String> = reg
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|d| d["type"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        types
+            .iter()
+            .any(|t| t.ends_with("/registry/record/put/0.3")),
+        "{types:?}"
+    );
+    assert!(
+        types
+            .iter()
+            .any(|t| t.ends_with("/registry/record/query/0.3")),
+        "{types:?}"
+    );
+    let r = reg.records.lock().unwrap()[&(
+        msf.did().to_string(),
+        MEMBER_ACTION.to_string(),
+        RESOURCE.to_string(),
+    )]
+        .clone();
+    assert_eq!(r["authorityId"], net.as_str());
+    assert_eq!(r["context"]["name"], "MSF");
+
+    // Health-AU departs: its record goes.
+    let grant = state
+        .network
+        .entry(au.did())
+        .await
+        .unwrap()
+        .grant
+        .unwrap()
+        .credential;
+    let departure = member::repudiate(&grant, &au, Utc::now() - Duration::seconds(5))
+        .await
+        .unwrap();
+    state
+        .network
+        .repudiate(au.did(), serde_json::to_value(departure).unwrap())
+        .await
+        .unwrap();
+    let report = sync.reconcile().await.unwrap();
+    assert_eq!(
+        report.deleted,
+        vec![format!("{} {MEMBER_ACTION}", au.did())],
+        "{report:?}"
+    );
+    assert_eq!(reg.records.lock().unwrap().len(), 1);
 }
