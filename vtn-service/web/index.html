@@ -189,6 +189,7 @@
   /* ---------------------------------------------------------------- sign-in */
   .notice { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
     padding: 22px 24px; }
+  #restricted:not(.hidden) + #tabs { margin-top: 16px; }
   .notice-head { display: flex; align-items: flex-start; gap: 14px; }
   .notice-head .lock { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft) no-repeat 50% 50% / 18px
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232f5d50' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E"); }
@@ -246,6 +247,7 @@
   <div class="top">
     <span class="brand"><i aria-hidden="true"></i>Verifiable Trust Network</span>
     <p class="session hidden" id="session" aria-live="polite"></p>
+    <button class="btn hidden" type="button" id="top-sign-in">Sign in</button>
   </div>
 
   <header class="hero">
@@ -1067,6 +1069,9 @@
     sessionBar();
     expireSignInAt();
     if (!SIGN_IN || signedIn()) $("wallet-sign-in").classList.add("hidden");
+    // A public directory needs no sign-in to read, so it shows no notice; administrators
+    // and members still sign in from the top bar (the Invite tab, reading as themselves).
+    if (SIGN_IN && !signedIn() && (info?.directory?.visibility || "public") === "public") $("top-sign-in").classList.remove("hidden");
     const visibility = info?.directory?.visibility || "public";
     VISIBILITY = visibility;
     if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
@@ -1119,6 +1124,16 @@
     try { await navigator.clipboard.writeText($("sign-in-link").textContent); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
     setTimeout(() => (b.textContent = "Copy link"), 1500);
   });
+  $("top-sign-in").addEventListener("click", () => {
+    $("top-sign-in").classList.add("hidden");
+    $("restricted-title").textContent = "Sign in";
+    $("restricted-text").textContent = "The directory is public. Administrators sign in to invite communities and networks; members, to read as themselves.";
+    const box = $("restricted");
+    $("tabs").before(box);
+    box.classList.remove("hidden");
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+    startSignIn();
+  });
   $("sign-in-cancel").addEventListener("click", async () => {
     const id = pending;
     pending = null;
@@ -1127,6 +1142,10 @@
     $("sign-in-panel").classList.add("hidden");
     $("sign-in-status").classList.remove("waiting");
     $("wallet-sign-in").classList.remove("hidden");
+    if (VISIBILITY === "public") {
+      $("restricted").classList.add("hidden");
+      $("top-sign-in").classList.remove("hidden");
+    }
   });
   document.querySelectorAll("[data-copy-from]").forEach((b) => b.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($(b.dataset.copyFrom).textContent); b.textContent = "Copied"; }
