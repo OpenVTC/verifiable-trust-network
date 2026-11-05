@@ -342,10 +342,10 @@
         <ol class="steps">
           <li><span><b>Scan the code</b> with your wallet app, or click it if your wallet is on this device.</span></li>
           <li><span><b>Approve</b> this page as a member community or network, or as an administrator.</span></li>
-          <li><span><b>Enter the number</b> shown here when your wallet asks.</span></li>
+          <li><span><b>Check the number</b>: a wallet in this browser fills it in, a phone wallet asks you to enter it.</span></li>
         </ol>
         <div class="number-box hidden" id="sign-in-number-box">
-          <p>Enter this number in your wallet</p>
+          <p>Your number. A wallet in this browser fills it in; on your phone, enter it when asked.</p>
           <p class="number" id="sign-in-number"></p>
         </div>
         <p class="status" id="sign-in-status">Waiting for your wallet…</p>
@@ -509,13 +509,40 @@
     box.classList.remove("hidden");
   }
 
+  // How long a code must have lived to be renewed when it ends unscanned: a clock off by
+  // minutes, or a network dropping requests, ends it instead of looping.
+  const MIN_CODE_LIFE_MS = 10000;
+
+  function showNumber(id, number) {
+    const n = $("sign-in-number");
+    n.textContent = number;
+    // C11: a wallet browser extension reads these for a code clicked on this page and
+    // fills the number in; only a phone wallet asks for it to be typed. Nothing is
+    // posted to the extension, and nothing comes back.
+    n.dataset.oobRequestId = id;
+    n.dataset.oobMatchNumber = number;
+    $("sign-in-number-box").classList.remove("hidden");
+  }
+
+  function hideNumber() {
+    const n = $("sign-in-number");
+    n.textContent = "";
+    delete n.dataset.oobRequestId;
+    delete n.dataset.oobMatchNumber;
+    $("sign-in-number-box").classList.add("hidden");
+  }
+
+  // Start a sign-in: a fresh key, a request, its code, and a long poll until it ends. An
+  // unscanned code that runs out is replaced while the tab is in view, so the page always
+  // shows one that works; one that ran out while hidden is replaced when the tab returns.
   async function startSignIn() {
     const status = $("sign-in-status");
     if (!SIGN_IN || !crypto.subtle) { status.textContent = "This browser cannot sign in here."; return; }
     try { await newKey(); } catch { $("sign-in-panel").classList.remove("hidden"); status.textContent = "This browser has no Ed25519 support; use a current browser."; return; }
     const opened = await send(SPEC + OOB.request, { purpose: "login", mode: "scan" }, true);
     $("sign-in-panel").classList.remove("hidden");
-    if (!opened.ok) { status.textContent = (opened.error && opened.error.message) || "The network did not start a sign-in."; return; }
+    if (!opened.ok) { status.textContent = (opened.error && opened.error.message) || "The network did not start a sign-in."; $("wallet-sign-in").classList.remove("hidden"); return; }
+    const openedAt = Date.now();
     const id = opened.payload.requestId;
     const exp = Math.floor(Date.parse(opened.payload.claimClosesAt) / 1000);
     const link = `https://${SIGN_IN.linkHost}/t#_from=${encodeFrom(NETWORK)}&_id=${id}&_exp=${exp}&_type=${SIGN_IN.flow}`;
@@ -524,12 +551,16 @@
     $("sign-in-open-btn").href = link;
     $("sign-in-qr").src = `/v1/sign-in/qr.svg?id=${encodeURIComponent(id)}&exp=${exp}`;
     $("wallet-sign-in").classList.add("hidden");
+    hideNumber();
     pending = id;
+    let claimed = false;
     status.textContent = "Waiting for your wallet…";
     status.classList.add("waiting");
     // Long-poll redeem until it is approved, declined or ends.
     while (pending === id) {
-      const r = await send(SPEC + OOB.redeem, { requestId: id }, true);
+      // A dropped connection is retried on the same request, not an error.
+      const r = await send(SPEC + OOB.redeem, { requestId: id }, true)
+        .catch(() => ({ ok: false, status: 0, code: "http0" }));
       if (pending !== id) return;
       if (r.ok) {
         Object.assign(signer, { approver: r.payload.subject, name: r.payload.displayName || null,
@@ -540,18 +571,47 @@
       }
       const details = (r.error && r.error.details) || {};
       if (r.code.endsWith(":pending")) {
-        if (details.matchNumber) { $("sign-in-number").textContent = details.matchNumber; $("sign-in-number-box").classList.remove("hidden"); status.textContent = "Approve in your wallet."; }
+        if (details.matchNumber) {
+          claimed = true;
+          showNumber(id, details.matchNumber);
+          status.textContent = "Approve in your wallet.";
+        }
         continue;
       }
+      if (r.status === 429 || r.code.endsWith(":rateLimited")) { await new Promise((ok) => setTimeout(ok, 2000)); continue; }
+      if (r.code.startsWith("http5") || r.code === "http0") { await new Promise((ok) => setTimeout(ok, 2000)); continue; }
       pending = null;
       status.classList.remove("waiting");
+      hideNumber();
+      const ran_out = r.code.endsWith(":requestExpired") || r.code.endsWith(":requestNotFound");
+      if (ran_out && !claimed && Date.now() - openedAt >= MIN_CODE_LIFE_MS) {
+        // Nobody scanned it: a fresh code, not an error.
+        if (document.visibilityState === "hidden") renewWhenVisible = true;
+        else startSignIn();
+        return;
+      }
       $("wallet-sign-in").classList.remove("hidden");
-      $("sign-in-number-box").classList.add("hidden");
       status.textContent = r.code.endsWith(":declined") ? "The sign-in was declined." :
-        r.code.endsWith(":requestExpired") ? "The sign-in expired. Start again." :
+        ran_out ? "The sign-in expired. Start again." :
         (r.error && r.error.message) || "The sign-in did not complete.";
       return;
     }
+  }
+
+  let renewWhenVisible = false;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden" && renewWhenVisible && !pending && !signedIn()) {
+      renewWhenVisible = false;
+      startSignIn();
+    }
+  });
+
+  // When the approval ends, go back to signed out: a members-only page then shows a fresh
+  // code straight away.
+  function expireSignInAt() {
+    if (!signedIn()) return;
+    const ms = signer.endsAt * 1000 - Date.now();
+    setTimeout(async () => { await forget(); location.reload(); }, Math.min(Math.max(ms, 0), 2147483647));
   }
 
   function el(tag, attrs = {}, ...children) {
@@ -656,6 +716,11 @@
       $("restricted-text").textContent = signedIn()
         ? "You are signed in, but not as a member of this network."
         : "This network's directory is visible to its members: a member community or network, or an administrator.";
+    }
+    // Nothing to read without signing in: show a code straight away, as the VTC does.
+    if (!signedIn() && SIGN_IN && !pending) {
+      if (document.visibilityState === "hidden") renewWhenVisible = true;
+      else startSignIn();
     }
   }
 
@@ -938,6 +1003,7 @@
     }
     await restore();
     sessionBar();
+    expireSignInAt();
     if (!SIGN_IN || signedIn()) $("wallet-sign-in").classList.add("hidden");
     const visibility = info?.directory?.visibility || "public";
     if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
