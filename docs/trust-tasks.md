@@ -10,6 +10,7 @@ Only artifacts that verifiers and browsers fetch by URL stay REST:
 |---|---|
 | `GET /` | the landing page itself |
 | `GET /.well-known/vtn` | the network profile, found from a URL before anything is signed |
+| `GET /v1/sign-in/qr.svg?id=&exp=` | the landing page's wallet sign-in link as a QR code, an image the page shows |
 | `GET /v1/status/{purpose}` | Bitstring Status Lists, dereferenced from `credentialStatus` |
 | `GET /v1/index` | the signed network index, a self-verifying document (VTI-VTN-024) |
 | `GET /v1/credentials/{id}` | a credential by `id`, so a graph edge can be dereferenced |

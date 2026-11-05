@@ -9,16 +9,18 @@
 //!   nobody;
 //! - the signed index and credentials by `id`, under `[directory] visibility = "public"`
 //!   only. In a restricted network the same credentials are read through
-//!   `vtn/entries/show` and `vtn/graph/show`, which carry the reader's signature (A21).
+//!   `vtn/entries/show` and `vtn/graph/show`, which carry the reader's signature (A21);
+//! - the landing page's wallet sign-in link as a QR code, an image the page shows.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use vti_vtn::model::Visibility;
 use vti_vtn::status::Purpose;
@@ -53,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/health/ready", get(ready))
         .route("/.well-known/vtn", get(profile))
+        .route("/v1/sign-in/qr.svg", get(sign_in_qr))
         .route("/v1/status/{purpose}", get(status_list))
         .route("/v1/index", get(index))
         .route("/v1/credentials/{id}", get(credential))
@@ -170,6 +173,61 @@ async fn profile(State(s): State<AppState>) -> Json<Value> {
             "status": "/v1/status/{purpose}",
         },
     }))
+}
+
+/// Which sign-in request a QR code is for: its id and claim deadline, as
+/// `auth/oob/request` answered them.
+#[derive(Deserialize)]
+struct SignInQr {
+    id: String,
+    exp: u64,
+}
+
+/// `GET /v1/sign-in/qr.svg?id=&exp=`: the trigger link for a sign-in request as a QR code,
+/// so a wallet on a phone can scan what the landing page shows on a laptop. The link is
+/// built here, from this network's DID and link host, so only this network's sign-in links
+/// are drawn. Level M, as the VTC's sign-in code; a link longer than level M holds
+/// (VTI-LNK-081) is refused.
+async fn sign_in_qr(State(s): State<AppState>, Query(q): Query<SignInQr>) -> Response {
+    use qrcode::render::svg;
+    use qrcode::{EcLevel, QrCode};
+
+    let well_formed = q.id.len() == 22
+        && q.id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !well_formed {
+        return (StatusCode::BAD_REQUEST, "not a sign-in request id").into_response();
+    }
+    let link = vti_oob_server::trigger_link(&s.sign_in.link_host, s.network.did(), &q.id, q.exp);
+    if !link.is_ascii() || link.len() > vti_oob_server::MAX_LINK_BYTES_LEVEL_M {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the sign-in link is too long for a QR code",
+        )
+            .into_response();
+    }
+    let Ok(code) = QrCode::with_error_correction_level(link.as_bytes(), EcLevel::M) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the sign-in link does not fit a QR code",
+        )
+            .into_response();
+    };
+    let image = code
+        .render::<svg::Color>()
+        .dark_color(svg::Color("#000000"))
+        .light_color(svg::Color("#ffffff"))
+        .quiet_zone(true)
+        .build();
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        image,
+    )
+        .into_response()
 }
 
 async fn status_list(

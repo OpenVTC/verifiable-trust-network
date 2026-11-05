@@ -383,3 +383,38 @@ async fn sign_in_keys_must_be_made_for_the_exchange() {
     doc = k_b.sign_document_for(doc, AUTHENTICATION).await.unwrap();
     assert_eq!(code(&net.post(&doc).await), "auth/oob:keyUnsupported");
 }
+
+/// The landing page shows the sign-in link as a QR code a phone wallet can scan, drawn from
+/// this network's own link (its DID and link host), and only for a well-formed request id.
+#[tokio::test]
+async fn the_sign_in_link_is_served_as_a_qr_code() {
+    let net = network().await;
+    let get = |uri: String| {
+        let app = net.app.clone();
+        async move {
+            let res = app
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = res.status();
+            let kind = res
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.to_str().unwrap().to_string());
+            let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            (status, kind, String::from_utf8(body.to_vec()).unwrap())
+        }
+    };
+
+    let id = vti_oob_server::new_request_id();
+    let exp = Utc::now().timestamp() as u64 + 120;
+    let (status, kind, svg) = get(format!("/v1/sign-in/qr.svg?id={id}&exp={exp}")).await;
+    assert_eq!(status, 200);
+    assert_eq!(kind.as_deref(), Some("image/svg+xml"));
+    assert!(svg.contains("<svg"), "{svg}");
+
+    let (status, _, _) = get(format!("/v1/sign-in/qr.svg?id=not-an-id&exp={exp}")).await;
+    assert_eq!(status, 400);
+    let (status, _, _) = get("/v1/sign-in/qr.svg".to_string()).await;
+    assert_eq!(status, 400);
+}
