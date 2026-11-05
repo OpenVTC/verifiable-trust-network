@@ -34,12 +34,19 @@ fn registry(publish: Publish) -> RegistryConfig {
 }
 
 async fn network(registry: Option<RegistryConfig>) -> (tempfile::TempDir, AppState) {
+    network_with_admins(registry, vec![]).await
+}
+
+async fn network_with_admins(
+    registry: Option<RegistryConfig>,
+    admins: Vec<String>,
+) -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
         listen: "127.0.0.1:0".into(),
         base_url: BASE_URL.into(),
         data_dir: dir.path().to_path_buf(),
-        admins: vec![],
+        admins,
         resolver_url: None,
         extra_root_certificates: vec![],
         status_cache_seconds: 0,
@@ -619,4 +626,144 @@ async fn records_are_written_as_signed_trust_tasks_over_the_session() {
         "{report:?}"
     );
     assert_eq!(reg.records.lock().unwrap().len(), 1);
+}
+
+/// Post a Trust Task document to the router and return the answer.
+async fn post(state: &AppState, doc: &Value) -> Value {
+    let res = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/trust-tasks")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(doc.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    serde_json::from_slice(&to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap()
+}
+
+/// `vtn/registry/check` (anyone, unsigned) relays the registry's signed answer; `vtn/registry/
+/// status` (administrators) compares every record with the projection.
+#[tokio::test]
+async fn the_registry_is_checked_and_read_through_the_network() {
+    let admin = Identity::generate();
+    let (_dir, mut state) = network_with_admins(
+        Some(registry(Publish::Members)),
+        vec![admin.did().to_string()],
+    )
+    .await;
+    let net = state.network.did().to_string();
+    let (msf, au) = (Identity::generate(), Identity::generate());
+    member_of(&state, &msf, "MSF").await;
+
+    let reg = Arc::new(SessionRegistry::new(&net));
+    let asker = Arc::new(vtn_service::registry::MessagingWriter::new(
+        state.network.clone(),
+        reg.clone(),
+        REGISTRY_DID.into(),
+        "did:web:mediator.example".into(),
+        std::time::Duration::from_secs(5),
+    ));
+    let syncer = Arc::new(Syncer::new(
+        state.network.clone(),
+        asker.clone(),
+        registry(Publish::Members),
+    ));
+    syncer.reconcile().await.unwrap();
+    member_of(&state, &au, "Health-AU").await; // projected, not yet written: `missing`
+    state.registry_link = Some(Arc::new(vtn_service::registry::Link {
+        config: registry(Publish::Members),
+        syncer,
+        asker: Some(asker),
+        connected: None,
+    }));
+
+    let check = |did: &str| {
+        serde_json::json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": "https://trusttasks.org/spec/vtn/registry/check/0.1",
+            "recipient": net,
+            "issuedAt": Utc::now().to_rfc3339(),
+            "payload": { "did": did },
+        })
+    };
+    let answer = post(&state, &check(msf.did())).await;
+    let p = &answer["payload"];
+    assert_eq!(p["reachable"], true, "{answer:#}");
+    assert_eq!(p["member"], true);
+    assert_eq!(p["listed"], false);
+    assert_eq!(p["registry"], REGISTRY_DID);
+    // The registry's own answer, verbatim and signed by it.
+    assert_eq!(p["answer"]["issuer"], reg.me.did());
+    vti_vtn::verify::verify_document(
+        &p["answer"],
+        reg.me.did(),
+        vti_vtn::verify::AUTHENTICATION,
+        &VtaKeyResolver::offline(),
+    )
+    .await
+    .unwrap();
+    let other = post(&state, &check(Identity::generate().did())).await;
+    assert_eq!(other["payload"]["member"], false, "{other:#}");
+
+    let status_doc = serde_json::json!({
+        "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+        "type": "https://trusttasks.org/spec/vtn/registry/status/0.1",
+        "issuer": admin.did(),
+        "recipient": net,
+        "issuedAt": Utc::now().to_rfc3339(),
+        "payload": {},
+    });
+    let status = post(
+        &state,
+        &admin
+            .sign_document_for(status_doc.clone(), vti_vtn::verify::AUTHENTICATION)
+            .await
+            .unwrap(),
+    )
+    .await;
+    let p = &status["payload"];
+    assert_eq!(p["reachable"], true, "{status:#}");
+    assert_eq!(p["lastSync"]["expected"], 1);
+    let rows = p["records"].as_array().unwrap();
+    let result = |did: &str| rows.iter().find(|r| r["did"] == did).unwrap()["result"].clone();
+    assert_eq!(result(msf.did()), "ok");
+    assert_eq!(result(au.did()), "missing");
+    // Not an administrator: refused.
+    let outsider = Identity::generate();
+    let mut doc = status_doc;
+    doc["id"] = serde_json::json!(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+    doc["issuer"] = serde_json::json!(outsider.did());
+    let refused = post(
+        &state,
+        &outsider
+            .sign_document_for(doc, vti_vtn::verify::AUTHENTICATION)
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        refused["payload"]["code"], "permissionDenied",
+        "{refused:#}"
+    );
+}
+
+/// Without a registry, both tasks answer `noRegistry`.
+#[tokio::test]
+async fn without_a_registry_the_registry_tasks_say_so() {
+    let (_dir, state) = network(None).await;
+    let doc = serde_json::json!({
+        "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+        "type": "https://trusttasks.org/spec/vtn/registry/check/0.1",
+        "recipient": state.network.did(),
+        "issuedAt": Utc::now().to_rfc3339(),
+        "payload": { "did": "did:web:msf.example" },
+    });
+    let answer = post(&state, &doc).await;
+    assert_eq!(
+        answer["payload"]["code"], "vtn/registry/check:noRegistry",
+        "{answer:#}"
+    );
 }

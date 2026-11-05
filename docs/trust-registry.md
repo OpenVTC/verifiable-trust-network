@@ -172,22 +172,32 @@ What has to be in place:
 
 ## Checking records
 
-Anyone, with the network's URL:
-
 ```sh
-nnm registry status          # the registry, its query URL, and whether it answers
+nnm registry status          # the registry, the writer, the last reconcile, and whether it answers
 nnm registry check <did>     # does the registry say <did> is a member, or listed?
-nnm registry records         # every entry against the registry: ok, missing, stale (administrators)
+nnm registry records         # every record against the projection: ok, missing, stale, wrong (administrators)
 ```
 
-Every answer must name this network as its authority, or `nnm` refuses it. Without `nnm`,
-any TRQP client asks the registry directly:
+How `nnm` asks depends on the registry:
 
-```sh
-curl -s https://registry.example.org/authorization -H 'content-type: application/json' -d '{
-  "entity_id": "<party DID>", "authority_id": "<network DID>",
-  "action": "member", "resource": "vtn" }'
-```
+- **It serves HTTPS** (`query_url` set): `nnm` asks the registry itself, over TRQP, and
+  refuses an answer that does not name this network as its authority. Without `nnm`, any
+  TRQP client does the same:
+
+  ```sh
+  curl -s https://registry.example.org/authorization -H 'content-type: application/json' -d '{
+    "entity_id": "<party DID>", "authority_id": "<network DID>",
+    "action": "member", "resource": "vtn" }'
+  ```
+
+- **It speaks DIDComm or TSP only** (no `query_url`): the network asks for you, over its
+  session. `vtn/registry/check` (anyone) returns what the registry answered **and the
+  registry's own signed answer document**; `vtn/registry/status` (administrators) returns
+  the writer, whether it is connected, the last reconcile, and every record compared with
+  the projection. `nnm registry check` says whether the relayed answer is signed by the
+  registry's DID. A relayed answer is weaker than asking directly (the network chose when
+  to ask), so `nnm verify` believes it only when that signature verifies against the
+  registry's DID, resolved independently, and reads the records itself.
 
 ## Privacy
 

@@ -1,5 +1,10 @@
-//! `nnm registry …`: what the trust registry says about this network's members, asked of
-//! the registry itself (TRQP over its HTTPS binding, `trql-client`), never of the network.
+//! `nnm registry …`: what the trust registry says about this network's members.
+//!
+//! - **Direct**, when the network advertises the registry's HTTPS query URL: asked of the
+//!   registry itself (TRQP over its HTTPS binding, `trql-client`), never of the network.
+//! - **Relayed**, for a registry that speaks DIDComm or TSP only: the network asks it over
+//!   its own session (`vtn/registry/check`, `vtn/registry/status`) and returns the registry's
+//!   answer; `check` shows whether that answer is signed by the registry's DID.
 //!
 //! The network advertises where to ask in its profile (`trustRegistry`, A23). Every answer
 //! must name this network as its authority (`TrqlClient::referred_by`), so a registry
@@ -170,6 +175,128 @@ pub async fn run(info: &Value, entries: Option<Value>, cmd: RegistryCommand) -> 
             }
             Ok(())
         }
+    }
+}
+
+/// Whether the network advertises an HTTPS query URL for its registry; without one, every
+/// `nnm registry` command is relayed by the network.
+pub fn is_direct(info: &Value) -> bool {
+    info.pointer("/trustRegistry/queryUrl")
+        .and_then(Value::as_str)
+        .is_some()
+}
+
+/// Print a relayed `vtn/registry/check` answer.
+pub fn print_relayed_check(answer: &Value) {
+    let did = answer["did"].as_str().unwrap_or("?");
+    println!("{did}");
+    if answer["reachable"] != true {
+        println!(
+            "  indeterminate: the network could not ask the registry ({})",
+            answer["reason"].as_str().unwrap_or("no reason given")
+        );
+        return;
+    }
+    let yes = |v: &Value| if *v == true { "yes" } else { "no" };
+    let member = answer["actions"]["member"].as_str().unwrap_or("member");
+    let listed = answer["actions"]["listed"].as_str().unwrap_or("lists");
+    println!("  {member:<8} {}", yes(&answer["member"]));
+    println!("  {listed:<8} {}", yes(&answer["listed"]));
+    let registry = answer["registry"].as_str().unwrap_or("?");
+    let reg_answer = &answer["answer"];
+    let signer = reg_answer["proof"]["verificationMethod"]
+        .as_str()
+        .and_then(|vm| vm.split('#').next());
+    match signer {
+        Some(s) if s == registry && reg_answer["issuer"] == registry => println!(
+            "  relayed by the network; the answer is signed by the registry's DID              (`nnm verify` checks the signature)"
+        ),
+        _ => println!("  relayed by the network; the answer is not signed by the registry"),
+    }
+}
+
+/// Print a relayed `vtn/registry/status` answer: `records` too when asked.
+pub fn print_relayed_status(answer: &Value, records: bool) {
+    let s = |k: &str| answer[k].as_str().unwrap_or("?").to_string();
+    if !records {
+        println!("registry:   {}", s("registry"));
+        println!("query:      relayed by the network (the registry speaks DIDComm or TSP)");
+        println!("authority:  {} (this network)", s("authority"));
+        println!("resource:   {}", s("resource"));
+        println!(
+            "actions:    {} (members), {} (listed)",
+            answer["actions"]["member"].as_str().unwrap_or("member"),
+            answer["actions"]["listed"].as_str().unwrap_or("lists")
+        );
+        println!("publishes:  {}", s("publishes"));
+        println!("writer:     {}", s("writer"));
+        println!(
+            "connected:  {}",
+            if answer["connected"] == true {
+                "yes"
+            } else {
+                "no"
+            }
+        );
+        match answer.get("lastSync") {
+            Some(l) => {
+                println!(
+                    "last sync:  {} — {} expected, {} put, {} deleted, {} failed",
+                    l["reconciledAt"].as_str().unwrap_or("?"),
+                    l["expected"],
+                    l["put"].as_array().map_or(0, Vec::len),
+                    l["deleted"].as_array().map_or(0, Vec::len),
+                    l["failed"].as_array().map_or(0, Vec::len),
+                );
+                if let Some(b) = l["blocked"].as_str() {
+                    println!("            blocked: {b}");
+                }
+                for f in l["failed"].as_array().into_iter().flatten() {
+                    println!("            failed: {}", f.as_str().unwrap_or("?"));
+                }
+            }
+            None => println!("last sync:  none yet"),
+        }
+        println!(
+            "answers:    {}",
+            if answer["reachable"] == true {
+                "yes".to_string()
+            } else {
+                format!("no — {}", answer["reason"].as_str().unwrap_or("?"))
+            }
+        );
+        return;
+    }
+    if answer["reachable"] != true {
+        println!(
+            "the registry could not be read: {}",
+            answer["reason"].as_str().unwrap_or("?")
+        );
+        return;
+    }
+    let mut drift = 0;
+    println!(
+        "{:<10} {:<10} {:<10} DID",
+        "result", "projected", "registry"
+    );
+    for row in answer["records"].as_array().into_iter().flatten() {
+        let result = row["result"].as_str().unwrap_or("?");
+        if result != "ok" {
+            drift += 1;
+        }
+        println!(
+            "{result:<10} {:<10} {:<10} {}",
+            row["projected"].as_str().unwrap_or("-"),
+            row["held"].as_str().unwrap_or("-"),
+            row["did"].as_str().unwrap_or("?")
+        );
+    }
+    if drift > 0 {
+        println!(
+            "\n{drift} record{} not as the network projects. `nnm registry status` shows the last \
+             reconcile and why it failed.",
+            if drift == 1 { " is" } else { "s are" }
+        );
     }
 }
 

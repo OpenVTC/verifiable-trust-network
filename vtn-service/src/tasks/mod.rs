@@ -338,6 +338,8 @@ async fn route(call: &Call<'_>, doc: &TrustTask<Value>, type_uri: &str) -> Trust
         memberships::repudiate::v0_1::Payload => memberships_repudiate,
         memberships::leave::v0_1::Payload => memberships_leave,
         memberships::groups::add::v0_1::Payload => memberships_groups_add,
+        registry::check::v0_1::Payload => registry_check,
+        registry::status::v0_1::Payload => registry_status,
     }
     if type_uri == <oob::RevokeSession as trust_tasks_rs::Payload>::TYPE_URI {
         return run::<oob::RevokeSession, _, _, _>(doc, |p| call.revoke_session(p)).await;
@@ -952,6 +954,33 @@ impl Call<'_> {
     }
 
     // --------------------------------------------- this network as a member of a parent
+
+    /// The running trust-registry link, or `noRegistry` when this network publishes to none.
+    fn registry_link(&self) -> ApiResult<&Arc<crate::registry::Link>> {
+        self.state
+            .registry_link
+            .as_ref()
+            .ok_or_else(|| ApiError::Coded {
+                local: "noRegistry",
+                message: "this network publishes its membership to no trust registry".into(),
+                details: None,
+            })
+    }
+
+    /// `vtn/registry/check`: anyone asks; the network asks its registry over its session and
+    /// returns what the registry answered, with the registry's signed answer verbatim.
+    async fn registry_check(&self, p: Did) -> ApiResult<Value> {
+        let link = self.registry_link()?;
+        Ok(link.check(self.network().did(), &p.did).await)
+    }
+
+    /// `vtn/registry/status`: the writer, the last reconcile, and every record, for an
+    /// administrator. Changes nothing.
+    async fn registry_status(&self, _: Nothing) -> ApiResult<Value> {
+        self.admin()?;
+        let link = self.registry_link()?;
+        Ok(link.status(self.network()).await?)
+    }
 
     /// `auth/revoke-session` `{ all: true }`, signed by a browser key: sign out. The key's
     /// delegation goes, so nothing it signs is read as its approver's again.

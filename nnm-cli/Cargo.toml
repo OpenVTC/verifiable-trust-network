@@ -35,6 +35,7 @@ uuid = { workspace = true }
 trql-client = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tempfile = { workspace = true }
 vtn-service = { path = "../vtn-service" }
 axum = { workspace = true }

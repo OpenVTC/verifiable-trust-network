@@ -125,6 +125,7 @@ pub async fn build_state_with(
         accepted,
         sign_in: config.auth.clone(),
         registry: config.registry.clone(),
+        registry_link: None,
     })
 }
 

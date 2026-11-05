@@ -413,6 +413,213 @@ impl RegistryWriter for MessagingWriter {
     }
 }
 
+/// What the registry said about one party, as `vtn/registry/check` returns it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CheckOutcome {
+    pub reachable: bool,
+    pub member: Option<bool>,
+    pub listed: Option<bool>,
+    /// The registry's own answer document, verbatim (signed by the registry).
+    pub answer: Option<Value>,
+    pub reason: Option<String>,
+}
+
+impl CheckOutcome {
+    pub fn unreachable(reason: impl Into<String>) -> Self {
+        Self {
+            reason: Some(reason.into()),
+            ..Default::default()
+        }
+    }
+}
+
+impl MessagingWriter {
+    /// Ask the registry for the records it holds about `entity` under `authority` and
+    /// [`RESOURCE`], and keep its answer. Unreachable (or refused) is indeterminate.
+    pub async fn check(&self, authority: &str, entity: &str) -> CheckOutcome {
+        let payload = json!({ "entityId": entity, "authorityId": authority, "resource": RESOURCE });
+        let answer = match self.ask(RECORD_QUERY, payload).await {
+            Ok(a) => a,
+            Err(e) => return CheckOutcome::unreachable(e.to_string()),
+        };
+        let kind = answer
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let body = answer.get("payload").cloned().unwrap_or(Value::Null);
+        let records: Vec<Value> = if kind == format!("{RECORD_QUERY}#response") {
+            body.get("records")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        } else if body
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|c| c.ends_with(":notFound"))
+        {
+            Vec::new()
+        } else {
+            let code = body
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return CheckOutcome {
+                answer: Some(answer.clone()),
+                ..CheckOutcome::unreachable(format!("the registry refused the query: {code}"))
+            };
+        };
+        let holds = |action: &str| {
+            records.iter().any(|r| {
+                r.get("entityId").and_then(Value::as_str) == Some(entity)
+                    && r.get("authorityId").and_then(Value::as_str) == Some(authority)
+                    && r.get("action").and_then(Value::as_str) == Some(action)
+                    && r.get("authorized").and_then(Value::as_bool) == Some(true)
+            })
+        };
+        CheckOutcome {
+            reachable: true,
+            member: Some(holds(MEMBER_ACTION)),
+            listed: Some(holds(LISTED_ACTION)),
+            answer: Some(answer),
+            reason: None,
+        }
+    }
+}
+
+/// One party, the record its entry projects and the record the registry holds.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Row {
+    pub did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
+    /// `ok`, `missing`, `stale` or `wrong`.
+    pub result: &'static str,
+}
+
+/// Compare what the entries project with what the registry holds.
+pub fn compare(want: &BTreeMap<String, Record>, held: &[Held]) -> Vec<Row> {
+    let held_by: BTreeMap<&str, &Held> = held.iter().map(|h| (h.entity_id.as_str(), h)).collect();
+    let mut rows: Vec<Row> = want
+        .values()
+        .map(|r| {
+            let h = held_by.get(r.entity_id.as_str());
+            Row {
+                did: r.entity_id.clone(),
+                projected: Some(r.action.clone()),
+                held: h.map(|h| h.action.clone()),
+                result: match h {
+                    None => "missing",
+                    Some(h) if h.action == r.action => "ok",
+                    Some(_) => "wrong",
+                },
+            }
+        })
+        .collect();
+    rows.extend(
+        held.iter()
+            .filter(|h| !want.contains_key(&h.entity_id))
+            .map(|h| Row {
+                did: h.entity_id.clone(),
+                projected: None,
+                held: Some(h.action.clone()),
+                result: "stale",
+            }),
+    );
+    rows
+}
+
+/// What a running network knows of its registry: the syncer, the session it asks over, and
+/// whether that session is up. Set once the session and the syncer are built.
+pub struct Link {
+    pub config: RegistryConfig,
+    pub syncer: Arc<Syncer>,
+    /// Asks the registry over the session; `None` without `[messaging]`.
+    pub asker: Option<Arc<MessagingWriter>>,
+    pub connected: Option<tokio::sync::watch::Receiver<bool>>,
+}
+
+impl Link {
+    /// `vtn/registry/check`'s answer about `entity`.
+    pub async fn check(&self, authority: &str, entity: &str) -> Value {
+        let outcome = match &self.asker {
+            Some(asker) => asker.check(authority, entity).await,
+            None => CheckOutcome::unreachable(
+                "this network has no DIDComm session ([messaging]) to ask its registry over",
+            ),
+        };
+        let mut out = json!({
+            "registry": self.config.did,
+            "authority": authority,
+            "resource": RESOURCE,
+            "actions": { "member": MEMBER_ACTION, "listed": LISTED_ACTION },
+            "did": entity,
+            "reachable": outcome.reachable,
+        });
+        if let Some(m) = outcome.member {
+            out["member"] = json!(m);
+        }
+        if let Some(l) = outcome.listed {
+            out["listed"] = json!(l);
+        }
+        if let Some(a) = outcome.answer {
+            out["answer"] = a;
+        }
+        if let Some(r) = outcome.reason {
+            out["reason"] = json!(r);
+        }
+        out
+    }
+
+    /// `vtn/registry/status`'s answer: the writer, the last reconcile, and every record.
+    pub async fn status(&self, network: &Network) -> Result<Value, AppError> {
+        let authority = network.did().to_string();
+        let mut out = json!({
+            "registry": self.config.did,
+            "authority": authority,
+            "resource": RESOURCE,
+            "actions": { "member": MEMBER_ACTION, "listed": LISTED_ACTION },
+            "publishes": match self.config.publish {
+                Publish::Members => "members",
+                Publish::MembersAndListed => "membersAndListed",
+            },
+            "writer": self.syncer.writer().describe(),
+            "connected": self.connected.as_ref().is_some_and(|c| *c.borrow()),
+        });
+        if let Some(r) = self.syncer.last_report().await? {
+            let mut sync = json!({
+                "expected": r.expected, "put": r.put, "deleted": r.deleted, "failed": r.failed,
+            });
+            if let Some(at) = r.at {
+                sync["reconciledAt"] = json!(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            }
+            if let Some(b) = r.blocked {
+                sync["blocked"] = json!(b);
+            }
+            out["lastSync"] = sync;
+        }
+        let entries = network.store.entries().await?;
+        let want = expected(&entries, self.config.publish, &network.profile.framework);
+        match self.syncer.writer().list(&authority).await {
+            Ok(Some(held)) => {
+                out["reachable"] = json!(true);
+                out["records"] = serde_json::to_value(compare(&want, &held))
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+            }
+            Ok(None) => {
+                out["reachable"] = json!(false);
+                out["reason"] = json!("this network's writer cannot list the registry's records");
+            }
+            Err(e) => {
+                out["reachable"] = json!(false);
+                out["reason"] = json!(e.to_string());
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// An in-memory registry, for tests: what was written, and failures on demand.
 #[derive(Default)]
 pub struct MockRegistry {

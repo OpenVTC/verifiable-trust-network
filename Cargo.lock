@@ -4165,6 +4165,7 @@ version = "0.1.0"
 dependencies = [
  "affinidi-secrets-resolver",
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "clap",
@@ -4180,7 +4181,7 @@ dependencies = [
  "trql-client",
  "trust-tasks-rs",
  "uuid",
- "vti-specs-vtn 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vti-specs-vtn",
  "vti-vtn",
  "vtn-service",
 ]
@@ -7159,7 +7160,7 @@ dependencies = [
  "vti-specs-rooms 0.7.0",
  "vti-specs-vta 0.5.2",
  "vti-specs-vtc 0.6.2",
- "vti-specs-vtn 0.2.1",
+ "vti-specs-vtn",
 ]
 
 [[package]]
@@ -7173,7 +7174,7 @@ dependencies = [
  "vti-specs-rooms 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "vti-specs-vta 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "vti-specs-vtc 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "vti-specs-vtn 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vti-specs-vtn",
 ]
 
 [[package]]
@@ -7257,16 +7258,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vti-specs-vtn"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66db17f1902db6b4995f0cb8a6f7761c304f3967e3deddc8247c7fab797c248a"
-dependencies = [
- "trust-tasks-build",
- "trust-tasks-rs",
-]
-
-[[package]]
 name = "vti-trust-task-server"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7311,7 +7302,7 @@ dependencies = [
  "trust-tasks-rs",
  "uuid",
  "vta-sdk 0.84.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "vti-specs-vtn 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vti-specs-vtn",
 ]
 
 [[package]]
@@ -7351,7 +7342,7 @@ dependencies = [
  "vti-secrets",
  "vti-specs-core 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vti-specs-vtc 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "vti-specs-vtn 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vti-specs-vtn",
  "vti-trust-task-server",
  "vti-vtn",
 ]

@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Serve => {
             let config = Config::load(&cli.config)?;
-            let state = vtn_service::build_state(&config).await?;
+            let mut state = vtn_service::build_state(&config).await?;
             tracing::info!(
                 did = state.network.did(),
                 listen = %config.listen,
@@ -104,19 +104,23 @@ async fn main() -> anyhow::Result<()> {
             // The trust-registry projection: reconciled once the writer can write (which adds
             // existing members), after every entry change, and every `sync_interval_secs`.
             if let Some(registry) = &config.registry {
-                let writer: std::sync::Arc<dyn vtn_service::registry::RegistryWriter> =
-                    match (&session, &config.messaging) {
-                        (Some(session), Some(messaging)) => {
-                            std::sync::Arc::new(vtn_service::registry::MessagingWriter::new(
-                                state.network.clone(),
-                                std::sync::Arc::new(session.requester.clone()),
-                                registry.did.clone(),
-                                messaging.mediator_did.clone(),
-                                std::time::Duration::from_secs(messaging.request_timeout_secs),
-                            ))
-                        }
-                        _ => std::sync::Arc::new(vtn_service::registry::NoWriteTransport),
-                    };
+                let asker = match (&session, &config.messaging) {
+                    (Some(session), Some(messaging)) => Some(std::sync::Arc::new(
+                        vtn_service::registry::MessagingWriter::new(
+                            state.network.clone(),
+                            std::sync::Arc::new(session.requester.clone()),
+                            registry.did.clone(),
+                            messaging.mediator_did.clone(),
+                            std::time::Duration::from_secs(messaging.request_timeout_secs),
+                        ),
+                    )),
+                    _ => None,
+                };
+                let writer: std::sync::Arc<dyn vtn_service::registry::RegistryWriter> = match &asker
+                {
+                    Some(asker) => asker.clone(),
+                    None => std::sync::Arc::new(vtn_service::registry::NoWriteTransport),
+                };
                 let mut syncer = vtn_service::registry::Syncer::new(
                     state.network.clone(),
                     writer,
@@ -126,6 +130,12 @@ async fn main() -> anyhow::Result<()> {
                     syncer = syncer.with_ready(session.connected.clone());
                 }
                 let syncer = std::sync::Arc::new(syncer);
+                state.registry_link = Some(std::sync::Arc::new(vtn_service::registry::Link {
+                    config: registry.clone(),
+                    syncer: syncer.clone(),
+                    asker,
+                    connected: session.as_ref().map(|s| s.connected.clone()),
+                }));
                 tracing::info!(
                     registry = %registry.did,
                     publish = registry.publish.as_str(),

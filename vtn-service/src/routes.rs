@@ -49,6 +49,9 @@ pub struct AppState {
     pub sign_in: crate::config::AuthConfig,
     /// The trust registry membership is projected to, if any (`crate::registry`).
     pub registry: Option<crate::config::RegistryConfig>,
+    /// The running projection and the session it asks the registry over, once `vtn serve`
+    /// has built them (`vtn/registry/*`).
+    pub registry_link: Option<Arc<crate::registry::Link>>,
 }
 
 pub fn router(state: AppState) -> Router {

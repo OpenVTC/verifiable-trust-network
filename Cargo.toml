@@ -70,6 +70,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Until vti-common with host_session::Requester is on crates.io. Remove once published.
+# Until vti-common with host_session::Requester, and vti-specs-vtn with vtn/registry/*, are on
+# crates.io. Remove once published.
 [patch.crates-io]
 vti-common = { path = "../../vti-worktrees/host-requests/vti-common" }
+vti-specs-vtn = { path = "../../vti-worktrees/host-requests/vti-specs-vtn" }
