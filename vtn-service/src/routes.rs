@@ -151,18 +151,7 @@ async fn landing() -> Response {
     res
 }
 
-/// `GET /.well-known/vtn`: public, and readable from any origin, so a community's console
-/// can show the network an invitation names before joining it.
-async fn profile(State(s): State<AppState>) -> Response {
-    let mut res = profile_body(&s).into_response();
-    res.headers_mut().insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("*"),
-    );
-    res
-}
-
-fn profile_body(s: &AppState) -> Json<Value> {
+async fn profile(State(s): State<AppState>) -> Json<Value> {
     Json(json!({
         "did": s.network.did(),
         "profile": s.network.profile,

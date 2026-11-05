@@ -905,25 +905,6 @@ async fn health_and_readiness_answer_without_a_signature() {
 }
 
 #[tokio::test]
-async fn the_profile_is_readable_from_any_origin() {
-    let whn = network("WHN").await;
-    let res = whn
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/.well-known/vtn")
-                .header(header::ORIGIN, "https://vtc.example")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
-}
-
-#[tokio::test]
 async fn landing_page_is_served_with_a_strict_policy() {
     let whn = network("WHN").await;
     let res = whn
