@@ -100,6 +100,7 @@ nnm networks add <name> <url> | list | use <name> | remove <name>
 nnm status
 nnm entries [<did>]
 nnm list <did> --kind community|network [--label <label>] [--description …] [--url …] [--tag …]
+nnm invite <did> [--kind community|network] [--label …] [--console <vtc url>] [--url …]   # list, then print the invitation
 nnm profile <did> [--label …] [--description …] [--url …] [--tag …]
 nnm directory [terms…] [--kind community|network] [--members-only] [--federated]
 nnm roles
