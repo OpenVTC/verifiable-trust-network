@@ -4,6 +4,7 @@
 //! crowd's, so serialising them buys simple, obviously-correct status allocation and state
 //! transitions at no practical cost.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -194,12 +195,40 @@ impl Network {
                 EdgeStatus::Valid
             }
         };
-        Ok(graph::export(
-            &self.profile,
-            &entries,
-            &lookup,
-            include_exited,
-        ))
+        let mut graph = graph::export(&self.profile, &entries, &lookup, include_exited);
+        self.check_party_credentials(&mut graph, &entries).await;
+        Ok(graph)
+    }
+
+    /// The credentials a listed party issued (its acknowledgement, its repudiation) carry
+    /// that party's status lists, not this network's, so `graph::export` leaves them
+    /// `unchecked`. Check them against the party's lists (cached for
+    /// `status_cache_seconds`). One that cannot be checked (the list unreachable, or not
+    /// signed by the party) stays `unchecked`, never `valid`.
+    async fn check_party_credentials(&self, graph: &mut Graph, entries: &[Entry]) {
+        let issued_by_party: HashMap<&str, &Value> = entries
+            .iter()
+            .flat_map(|e| [e.ack.as_ref(), e.repudiation.as_ref()])
+            .flatten()
+            .filter_map(|c| c.get("id").and_then(Value::as_str).map(|id| (id, c)))
+            .collect();
+        for edge in &mut graph.edges {
+            if edge.status != EdgeStatus::Unchecked {
+                continue;
+            }
+            let Some(credential) = issued_by_party.get(edge.id.as_str()) else {
+                continue;
+            };
+            edge.status = match self.status.check(credential).await {
+                Ok(CredentialState::Valid) => EdgeStatus::Valid,
+                Ok(CredentialState::Suspended) => EdgeStatus::Suspended,
+                Ok(CredentialState::Revoked) => EdgeStatus::Revoked,
+                Err(e) => {
+                    tracing::warn!(credential = %edge.id, error = %e, "a party's credential status could not be checked");
+                    EdgeStatus::Unchecked
+                }
+            };
+        }
     }
 
     /// The signed status list credential for `purpose`.
