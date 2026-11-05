@@ -53,6 +53,8 @@ clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 getrandom = "0.4"
 multibase = "0.9"
+# The landing page's sign-in link as a QR code. SVG only, as the VTC's.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 reqwest = { version = "0.13", features = ["json"] }
 serde_ignored = "0.1"
 serde = { version = "1", features = ["derive"] }

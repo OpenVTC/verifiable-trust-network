@@ -108,6 +108,9 @@
   .signin { margin-top: 12px; }
   .signin .link { font-family: var(--mono); font-size: 12px; word-break: break-all; background: var(--bg);
     border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  .signin .qr { display: inline-block; margin: 8px 0; line-height: 0; border-radius: 8px; overflow: hidden; }
+  .signin .qr img { width: 220px; height: 220px; image-rendering: pixelated; background: #fff; }
+  .signin details { margin: 4px 0 8px; font-size: 13px; }
   .signin .number { font-family: var(--mono); font-size: 28px; letter-spacing: 6px; margin: 6px 0; }
   .hidden { display: none !important; }
 </style>
@@ -174,9 +177,12 @@
     <p id="restricted-text"></p>
     <button class="btn" type="button" id="wallet-sign-in">Sign in with a wallet</button>
     <div class="signin hidden" id="sign-in-panel">
-      <p>Open this link on the device that holds your wallet. It asks you to approve this page as you: a member community or network, or an administrator of this network.</p>
-      <p class="link" id="sign-in-link"></p>
-      <p><a id="sign-in-open" href="#" rel="noopener noreferrer">Open in wallet</a> <button class="copy" type="button" id="sign-in-copy">Copy link</button></p>
+      <p>Scan this code with your wallet app, or click it if your wallet is on this device. Your wallet asks you to approve this page as you: a member community or network, or an administrator of this network.</p>
+      <a class="qr" id="sign-in-open" href="#" rel="noopener noreferrer" title="Open in your wallet"><img id="sign-in-qr" alt="Sign-in code for your wallet"></a>
+      <details><summary>Show the link</summary>
+        <p class="link" id="sign-in-link"></p>
+        <p><button class="copy" type="button" id="sign-in-copy">Copy link</button></p>
+      </details>
       <div class="hidden" id="sign-in-number-box">
         <p>When your wallet asks, enter this number:</p>
         <p class="number" id="sign-in-number"></p>
@@ -335,6 +341,7 @@
     const link = `https://${SIGN_IN.linkHost}/t#_from=${encodeFrom(NETWORK)}&_id=${id}&_exp=${exp}&_type=${SIGN_IN.flow}`;
     $("sign-in-link").textContent = link;
     $("sign-in-open").href = link;
+    $("sign-in-qr").src = `/v1/sign-in/qr.svg?id=${encodeURIComponent(id)}&exp=${exp}`;
     $("wallet-sign-in").classList.add("hidden");
     pending = id;
     status.textContent = "Waiting for your wallet…";

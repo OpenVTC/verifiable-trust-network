@@ -136,6 +136,7 @@ Only what is fetched by URL stays a plain `GET`:
 |---|---|
 | `/` | Landing page with the searchable directory |
 | `/.well-known/vtn` | DID, profile, roles and directory visibility |
+| `/v1/sign-in/qr.svg` | The landing page's wallet sign-in link as a QR code |
 | `/v1/status/{revocation\|suspension}` | Signed `BitstringStatusListCredential` |
 | `/v1/index` | Signed index of published entries (`visibility = "public"` only, A21) |
 | `/v1/credentials/{id}` | A credential the network issued or holds (`visibility = "public"` only, A21) |
