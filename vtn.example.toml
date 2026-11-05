@@ -64,12 +64,18 @@ retry_base_seconds = 30    # first retry delay; doubles each attempt, capped at 
 
 # Rooms the network opens for a role. A person gets a short-lived pass by presenting their
 # group's membership credential and the chain of group registrations up to this network.
-# Publish membership to a trust registry as TRQP records (A22, docs/trust-registry.md).
+# Publish membership to a trust registry as TRQP records (A23, docs/trust-registry.md).
 # [registry]
 # did = "did:webvh:QmRegistry:registry.example.org"
-# query_url = "https://registry.example.org"   # its public query base, advertised
+# query_url = "https://registry.example.org"   # only if it serves HTTPS queries; leave out for DIDComm/TSP only
 # publish = "members"                          # or "members-and-listed"
 # sync_interval_secs = 3600
+#
+# The network's DIDComm session, through its mediator: how it writes its registry records.
+# Needs a provisioned [identity] and a DIDCommMessaging service in its DID document.
+# [messaging]
+# mediator_did = "did:webvh:QmMediator:mediator.example.org"
+# request_timeout_secs = 20
 
 [[rooms]]
 id = "pandemic"

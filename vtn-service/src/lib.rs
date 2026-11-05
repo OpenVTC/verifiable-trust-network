@@ -14,6 +14,7 @@ pub mod federation;
 pub mod groups;
 pub mod identity;
 pub mod memberships;
+pub mod messaging;
 pub mod network;
 pub mod registry;
 pub mod rooms;
@@ -124,6 +125,7 @@ pub async fn build_state_with(
         accepted,
         sign_in: config.auth.clone(),
         registry: config.registry.clone(),
+        registry_link: None,
     })
 }
 

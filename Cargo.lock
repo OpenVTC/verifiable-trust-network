@@ -4045,9 +4045,9 @@ checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
 name = "mime"
-version = "0.3.17"
+version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
 name = "minimal-lexical"
@@ -4165,6 +4165,7 @@ version = "0.1.0"
 dependencies = [
  "affinidi-secrets-resolver",
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "clap",
@@ -6506,9 +6507,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-capability-client"
-version = "0.37.2"
+version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e52b26331faeeb272bb2229bb6fe7899f600bb42cf01a8f2ff830a0c5ff2d99"
+checksum = "51de08b14d546e36f09dccdd6f204d1f9055710237b252ec3a6e975984e5fd49"
 dependencies = [
  "chrono",
  "serde",
@@ -6519,10 +6520,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "trust-tasks-https"
-version = "0.37.2"
+name = "trust-tasks-didcomm"
+version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bbdd3e778aa928d0fc4674271215efaf9025c7e54f4482830c6998b7a9ef873"
+checksum = "d3293786330bdd641c82cafe0410c6ef9278f00472c55272cbf3fe98d33cd657"
+dependencies = [
+ "affinidi-messaging-didcomm",
+ "base64 0.22.1",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "trust-tasks-rs",
+ "uuid",
+]
+
+[[package]]
+name = "trust-tasks-https"
+version = "0.37.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fca563f32752392098c7ec8bf4644bca5ef997c7eb0e8051141b087077208d27"
 dependencies = [
  "axum",
  "chrono",
@@ -6539,9 +6556,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.37.2"
+version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a252f7815bcf23905c0eaf4416cfb7f23cd75fbb5719b47ca14099009a4863"
+checksum = "e908677e4b2e3de02f85431abc966e35a788bde0adf215c52c2204433327207d"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -6557,9 +6574,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-rs"
-version = "0.37.2"
+version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e89ed119a143228626d3b2c7d3d6f62fee8fedc6c27784e3721fbd947816cdaa"
+checksum = "e4b01307cb18fb970e50605c1a9e9775676b7243b19414d581be5307bc884f3a"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6573,9 +6590,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-tsp"
-version = "0.37.2"
+version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "201c2b4eb56adea45c512a1b8c36157539f8f9e89c915d4d0ce997a9cebe82c3"
+checksum = "604494c66c3d81247befd6b8d8f1dbe8d0587ef2296ce84e104738817d0e742a"
 dependencies = [
  "affinidi-tsp",
  "chrono",
@@ -6948,9 +6965,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vta-sdk"
-version = "0.82.0"
+version = "0.85.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6bacd46f7c4208397d13d47c0ce3e767553c2244a17a703c658c6fc25403c0a"
+checksum = "5c437321782d4181a31f6bc2e284d50d4da739d9f51c4cb4aeb092b0ba95aff9"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -7000,14 +7017,15 @@ dependencies = [
 
 [[package]]
 name = "vti-common"
-version = "0.58.0"
+version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ce06d5f73f2b5f23aba2902b4d3cd3c92213ad16d5a8fa4aaa8391427f3bf04"
+checksum = "550e36e47c96530c864bf7a45f45aae532311c291ea675aec41862de6245018d"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-core",
  "affinidi-messaging-delivery",
+ "affinidi-messaging-sdk",
  "affinidi-secrets-resolver",
  "affinidi-tdk",
  "async-trait",
@@ -7038,6 +7056,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trust-tasks-capability-client",
+ "trust-tasks-didcomm",
  "trust-tasks-rs",
  "uuid",
  "vta-sdk",
@@ -7046,9 +7065,9 @@ dependencies = [
 
 [[package]]
 name = "vti-oob-server"
-version = "0.3.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74db5c9ccf432152cbd158a25bb0abc62f6f535a1ce5ede428ec29a50c95e2d3"
+checksum = "dd7a8ee8d1fecd64b27abeaa7f1f321803a7425e00a30b2eae5208d67f9d7ebb"
 dependencies = [
  "async-trait",
  "axum",
@@ -7071,9 +7090,9 @@ dependencies = [
 
 [[package]]
 name = "vti-secrets"
-version = "0.31.0"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "865f19d24adc9ef64939520ac0c3bd2e35464c6545441d5be520995a8d015505"
+checksum = "074d80d652922a663811faaa09e4e3c7abac02bf1127aa332f2fc315b97eeec4"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -7104,9 +7123,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs"
-version = "0.7.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d47e472166f0a7e21a4875ef9d037839a2e6a46d08b1e04dece7d801dd2944e"
+checksum = "aad1e88436883666c1fe735cb4dcf4c49dad0c8aad31b154b517349b8b35d8bf"
 dependencies = [
  "trust-tasks-rs",
  "vti-specs-core",
@@ -7128,9 +7147,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-rooms"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e951dcd0085acb4dc9645827cff989363c30d3232356dc2b8d546bba3a9a3f"
+checksum = "2a46ec7ed6663f4f9c82b2b1b9e9abac6f780740e05c84bcf2476a05a2054e5d"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -7138,9 +7157,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-vta"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3401501ab9920416a6c9c201f4a649d034eb47270f062323947428aba0a4ac8"
+checksum = "8a32165f09c8d1db6a3d29b923ab55ba27f62283a90830ee86ca5ce38ad75139"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -7148,9 +7167,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-vtc"
-version = "0.6.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bbc6cba530f2fc02dbb81b0e7356002d13caa4a172ffd5d52d579dfbb77fcd9"
+checksum = "71ff43109087ac52acb090ac3cd22bafb3c18fe3d0e4a0fe6f9cd2c5f1aec411"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -7158,9 +7177,9 @@ dependencies = [
 
 [[package]]
 name = "vti-specs-vtn"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66db17f1902db6b4995f0cb8a6f7761c304f3967e3deddc8247c7fab797c248a"
+checksum = "ddb9ba0c0a4ac69c3b809c1c63b6c2e368dd2d66666778374fd9b16ad55d35d5"
 dependencies = [
  "trust-tasks-build",
  "trust-tasks-rs",
@@ -7168,9 +7187,9 @@ dependencies = [
 
 [[package]]
 name = "vti-trust-task-server"
-version = "0.4.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f842cbdcced975b5acf38b7f6dbf9da6dc6c978560e66cbe1d28888c624bd7cc"
+checksum = "d1a476dacc0d5710ec5ad9ca4c46556bb149b62ea3234e56e9348899e2e3d861"
 dependencies = [
  "async-trait",
  "axum",
@@ -7189,9 +7208,9 @@ dependencies = [
 
 [[package]]
 name = "vti-vtn"
-version = "0.5.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1508fc7b6dfb066b5bdb4c50493f7c91ae1ba2048b12c9b88b830b8a1fdeb9b2"
+checksum = "5fd4c5e0661f5901c09e0d5596d964523d8e4a02b996e56310e7eac9c8c602bc"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-resolver-cache-sdk",
@@ -7573,9 +7592,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 
 [[package]]
 name = "wit-bindgen"

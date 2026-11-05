@@ -85,8 +85,12 @@ It needs no admin key or profile, and trusts nothing the network says without ch
    Each must name the right subject, be inside its validity window, and not be revoked or
    suspended on its issuer's status lists, which are themselves verified as signed by that
    issuer.
-4. It asks the trust registry, over TRQP, for `(did, network, member, vtn)`, then for
-   `lists`.
+4. It asks the trust registry for `(did, network, member, vtn)`, then for `lists`: over TRQP
+   when the registry serves HTTPS (`--registry`, or the profile's `queryUrl`). For a
+   DIDComm/TSP-only registry it asks through the network (`vtn/registry/check`), and counts
+   the answer only when the registry's own signature on it verifies against the registry's
+   DID, resolved here, reading the records itself. The report says `relayed by the network`.
+   An answer the registry did not sign is indeterminate.
 
 Exit code: `0` member, `1` not a member (listed only, suspended, revoked or absent), `2`
 indeterminate (including when the network and the registry disagree). Example:
@@ -137,7 +141,15 @@ Lists.
 
 ## For a browser to query the registry
 
-The landing page queries the registry from the visitor's browser. That needs two things:
+A registry that speaks **DIDComm or TSP only** cannot be asked from a browser. The page then
+asks the network to relay (`vtn/registry/check`): the network asks the registry over its own
+session and returns the registry's signed answer, and the page says the answer was relayed,
+and whether it is signed by the registry's DID. That is weaker than asking directly; for the
+full check run `nnm verify`, which verifies the registry's signature on the relayed answer
+against the registry's DID, resolved independently.
+
+For a registry that serves HTTPS, the landing page queries it from the visitor's browser.
+That needs two things:
 
 - the network's profile names the registry's public query URL (`trustRegistry.queryUrl`),
   and the page's Content-Security-Policy allows it;

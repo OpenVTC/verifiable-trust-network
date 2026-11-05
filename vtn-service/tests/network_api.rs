@@ -104,6 +104,7 @@ fn test_config(dir: &std::path::Path, name: &str, admins: Vec<String>) -> Config
         rooms: vec![],
         identity: None,
         secrets: None,
+        messaging: None,
         registry: None,
     }
 }
@@ -950,7 +951,7 @@ async fn every_task_is_served() {
         .map(|e| e.type_uri)
         .filter(|uri| !uri.contains('#'))
         .collect();
-    assert_eq!(requests.len(), 33, "{requests:?}");
+    assert_eq!(requests.len(), 35, "{requests:?}");
     let template = request_document(
         None,
         &whn.did(),

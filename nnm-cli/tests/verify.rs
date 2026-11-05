@@ -26,9 +26,17 @@ struct Net {
     url: String,
     did: String,
     operator: Identity,
+    /// The trust-registry projection, when the network relays a DIDComm-only registry.
+    syncer: Option<Arc<vtn_service::registry::Syncer>>,
 }
 
 async fn network(visibility: Visibility) -> Net {
+    network_with(visibility, None).await
+}
+
+/// A network publishing to `relayed`, a registry it reaches over its session only (no HTTPS
+/// query URL), so a verifier's registry check is relayed through `vtn/registry/check`.
+async fn network_with(visibility: Visibility, relayed: Option<Arc<SessionRegistry>>) -> Net {
     let dir = tempfile::tempdir().unwrap();
     let operator = Identity::generate();
     let (listener, url) = tls::bind().await;
@@ -60,13 +68,44 @@ async fn network(visibility: Visibility) -> Net {
         rooms: vec![],
         identity: None,
         secrets: None,
-        registry: None,
+        messaging: None,
+        registry: relayed
+            .as_ref()
+            .map(|r| vtn_service::config::RegistryConfig {
+                did: r.me.did().to_string(),
+                query_url: None,
+                publish: vtn_service::registry::Publish::Members,
+                sync_interval_secs: 3600,
+            }),
     };
     vtn_service::init_dev(&config).unwrap();
-    let state = vtn_service::build_state_with(&config, Arc::new(VtaKeyResolver::offline()))
+    let mut state = vtn_service::build_state_with(&config, Arc::new(VtaKeyResolver::offline()))
         .await
         .unwrap();
     let did = state.network.did().to_string();
+    let mut syncer = None;
+    if let (Some(reg), Some(rc)) = (relayed, config.registry.clone()) {
+        reg.admins.lock().unwrap().push(did.clone());
+        let asker = Arc::new(vtn_service::registry::MessagingWriter::new(
+            state.network.clone(),
+            reg.clone(),
+            rc.did.clone(),
+            "did:web:mediator.example".into(),
+            std::time::Duration::from_secs(5),
+        ));
+        let s = Arc::new(vtn_service::registry::Syncer::new(
+            state.network.clone(),
+            asker.clone(),
+            rc.clone(),
+        ));
+        state.registry_link = Some(Arc::new(vtn_service::registry::Link {
+            config: rc,
+            syncer: s.clone(),
+            asker: Some(asker),
+            connected: None,
+        }));
+        syncer = Some(s);
+    }
     let app = vtn_service::routes::router(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Net {
@@ -74,6 +113,7 @@ async fn network(visibility: Visibility) -> Net {
         url,
         did,
         operator,
+        syncer,
     }
 }
 
@@ -327,4 +367,133 @@ async fn a_restricted_directory_is_answered_by_the_registry_alone() {
         .verify(&net.url, msf.did(), None, Some(reg))
         .await;
     assert_eq!(report.verdict, Verdict::Member, "{}", report.to_text());
+}
+
+/// A registry reached only over the network's session: it answers `registry/record/*` from
+/// an admin DID with documents signed by its own key, as the Affinidi registry does.
+struct SessionRegistry {
+    me: Identity,
+    /// Sign answers with this key instead: a registry answer the network forged.
+    forger: Option<Identity>,
+    admins: Mutex<Vec<String>>,
+    records: Mutex<Vec<Value>>,
+}
+
+impl SessionRegistry {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            me: Identity::generate(),
+            forger: None,
+            admins: Mutex::default(),
+            records: Mutex::default(),
+        })
+    }
+    fn forged() -> Arc<Self> {
+        Arc::new(Self {
+            me: Identity::generate(),
+            forger: Some(Identity::generate()),
+            admins: Mutex::default(),
+            records: Mutex::default(),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl vtn_service::messaging::Exchange for SessionRegistry {
+    async fn request(
+        &self,
+        _peer: &str,
+        document: Value,
+        _timeout: std::time::Duration,
+    ) -> Result<Value, vtn_service::messaging::RequestError> {
+        let type_uri = document["type"].as_str().unwrap().to_string();
+        let issuer = document["issuer"].as_str().unwrap().to_string();
+        assert!(self.admins.lock().unwrap().contains(&issuer));
+        let payload = if type_uri.contains("/record/put/") {
+            self.records
+                .lock()
+                .unwrap()
+                .push(document["payload"]["record"].clone());
+            json!({ "ok": true, "wasCreated": true })
+        } else if type_uri.contains("/record/query/") {
+            let want = &document["payload"];
+            let records: Vec<Value> = self
+                .records
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r["authorityId"] == want["authorityId"])
+                .filter(|r| want.get("entityId").is_none_or(|e| r["entityId"] == *e))
+                .cloned()
+                .collect();
+            json!({ "records": records })
+        } else {
+            json!({ "ok": true })
+        };
+        let signer = self.forger.as_ref().unwrap_or(&self.me);
+        let answer = json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": format!("{type_uri}#response"),
+            "threadId": document["id"],
+            "issuer": self.me.did(),
+            "recipient": issuer,
+            "issuedAt": Utc::now().to_rfc3339(),
+            "payload": payload,
+        });
+        let mut signed = signer
+            .sign_document_for(answer, vti_vtn::verify::AUTHENTICATION)
+            .await
+            .unwrap();
+        signed["issuer"] = json!(self.me.did());
+        Ok(signed)
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+}
+
+/// A registry with no HTTPS: `nnm verify` asks through the network, and believes only the
+/// registry's own signed answer it carries.
+#[tokio::test]
+async fn a_relayed_registry_answer_counts_only_when_the_registry_signed_it() {
+    let net = network_with(Visibility::Public, Some(SessionRegistry::new())).await;
+    let msf = Identity::generate();
+    net.join(&msf).await;
+    net.syncer.as_ref().unwrap().reconcile().await.unwrap();
+    let report = verifier()
+        .verify(&net.url, msf.did(), Some(&net.did), None)
+        .await;
+    assert_eq!(
+        report.registry,
+        RegistryAnswer::Member,
+        "{}",
+        report.to_text()
+    );
+    assert_eq!(report.registry_via, Some("relayed"));
+    assert_eq!(report.verdict, Verdict::Member, "{}", report.to_text());
+    assert!(
+        report.to_text().contains("relayed by the network"),
+        "{}",
+        report.to_text()
+    );
+
+    // An answer the registry did not sign is not the registry's answer: indeterminate.
+    let forged = network_with(Visibility::Public, Some(SessionRegistry::forged())).await;
+    let au = Identity::generate();
+    forged.join(&au).await;
+    forged.syncer.as_ref().unwrap().reconcile().await.unwrap();
+    let report = verifier()
+        .verify(&forged.url, au.did(), Some(&forged.did), None)
+        .await;
+    assert_eq!(
+        report.registry,
+        RegistryAnswer::Unreachable,
+        "{}",
+        report.to_text()
+    );
+    assert!(
+        report.to_text().contains("signature does not verify"),
+        "{}",
+        report.to_text()
+    );
 }

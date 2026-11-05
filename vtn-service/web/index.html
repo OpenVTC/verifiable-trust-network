@@ -1162,9 +1162,32 @@
     return body ? body.authorized === true : null;
   }
 
+  // How the last registry answer was had: asked directly from this browser, or relayed by
+  // this network (`vtn/registry/check`) for a registry that serves no HTTPS. A relayed
+  // answer carries the registry's own signed document; `signed` says whether its proof is
+  // the registry's DID (checked by DID, not by signature: `nnm verify` checks that).
+  let REG_VIA = { via: "direct", signed: false, answer: null };
+
+  // The registry's answer through this network: member | listed | notFound | unreachable.
+  async function relayRegistry(did) {
+    let r;
+    try { r = await task("vtn/registry/check", { did }); } catch { return "unreachable"; }
+    if (!r.ok) return "unreachable";
+    const p = r.payload || {};
+    const answer = p.answer || null;
+    const proof = answer && answer.proof;
+    const vm = proof && typeof proof.verificationMethod === "string" ? proof.verificationMethod.split("#")[0] : null;
+    REG_VIA = { via: "relayed", signed: !!(vm && answer.issuer === TR.did && vm === TR.did), answer };
+    if (!p.reachable) return "unreachable";
+    if (p.member) return "member";
+    return p.listed ? "listed" : "notFound";
+  }
+
   // What the registry says: member | listed | notFound | unreachable | notPublished.
   async function askRegistry(did) {
-    if (!TR || !TR.queryUrl || !safeHref(TR.queryUrl)) return "notPublished";
+    REG_VIA = { via: "direct", signed: false, answer: null };
+    if (!TR) return "notPublished";
+    if (!TR.queryUrl || !safeHref(TR.queryUrl)) return relayRegistry(did);
     const member = await trqp(did, trAction("member"));
     if (member === null) return "unreachable";
     if (member) return "member";
@@ -1221,13 +1244,23 @@
   }
 
   function regText(reg) {
+    const relayed = REG_VIA.via === "relayed";
     return {
       member: "holds a member record for it",
       listed: "holds a listed (not acknowledged) record for it",
       notFound: "holds no record for it",
-      unreachable: "could not be asked from this browser (unreachable, or it does not allow this site)",
+      unreachable: relayed ? "could not be asked (the network could not reach it)"
+        : "could not be asked from this browser (unreachable, or it does not allow this site)",
       notPublished: "this network publishes no trust registry",
     }[reg];
+  }
+
+  // How the registry's answer was had, for the reader.
+  function viaText() {
+    if (REG_VIA.via !== "relayed") return "asked directly from this browser";
+    return REG_VIA.signed
+      ? "relayed by this network; the answer is signed by the registry's DID"
+      : "relayed by this network; take it as the network's word";
   }
 
   function netText(n) {
@@ -1260,6 +1293,7 @@
       : "The trust registry " + regText(reg) + ".";
     const facts = el("dl", { class: "facts" },
       el("dt", {}, "Trust registry"), el("dd", {}, regText(reg)),
+      ...(reg === "notPublished" ? [] : [el("dt", {}, "Asked"), el("dd", {}, viaText())]),
       el("dt", {}, "The network"), el("dd", {}, netText(net)),
       el("dt", {}, "Agree"), el("dd", {}, agree === null ? "—" : agree ? "Yes" : "No"));
     const kids = [verdictBox(key, agree === false ? undefined : lead), facts];
@@ -1272,9 +1306,11 @@
 
   function openCheck(did) {
     const dlg = $("check");
-    $("check-intro").textContent = TR && TR.queryUrl
-      ? "Is this DID a member of this network? Asked of its trust registry, directly from your browser, and of the network itself."
-      : "Is this DID a member of this network? This network publishes no trust registry, so the answer is the network's own signed one.";
+    $("check-intro").textContent = !TR
+      ? "Is this DID a member of this network? This network publishes no trust registry, so the answer is the network's own signed one."
+      : TR.queryUrl
+        ? "Is this DID a member of this network? Asked of its trust registry, directly from your browser, and of the network itself."
+        : "Is this DID a member of this network? Asked of its trust registry (which speaks DIDComm or TSP only, so the network relays the question and returns the registry's signed answer), and of the network itself.";
     $("check-out").replaceChildren();
     if (did) $("check-did").value = did;
     if (!dlg.open) dlg.showModal();
@@ -1362,7 +1398,7 @@
     // 2. The registry.
     const agree = agrees(net, reg);
     rows.push([reg === "notPublished" || reg === "unreachable" ? "unknown" : agree === false ? "fail" : "pass",
-      "Trust registry", regText(reg) + (TR && TR.queryUrl ? " (" + TR.queryUrl + ", asked from this browser)" : "")]);
+      "Trust registry", regText(reg) + (reg === "notPublished" ? "" : " (" + (TR.queryUrl && REG_VIA.via === "direct" ? TR.queryUrl + ", " : "") + viaText() + ")")]);
 
     const failed = rows.some((x) => x[0] === "fail");
     const revoked = rows.some((x) => x[0] === "fail" && /status$/.test(x[1]) && /revoked/.test(x[2]));
@@ -1407,6 +1443,7 @@
     if (TR) {
       facts.push(["Publishes", TR.publishes === "members-and-listed" ? "members, and listed parties (as “listed”)" : "acknowledged members only"]);
       if (TR.queryUrl) facts.push(["Query", el("span", { class: "did" }, TR.queryUrl)]);
+      else facts.push(["Query", "DIDComm or TSP only: this page asks the network to relay (vtn/registry/check), and shows the registry's signed answer"]);
       facts.push(["Records", el("span", { class: "did" }, `(party, ${TR.authority || NETWORK}, ${trAction("member")}, ${TR.resource || "vtn"})`)]);
     }
     const evidence = el("span", {});

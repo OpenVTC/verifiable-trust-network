@@ -55,6 +55,7 @@ vti-common = { workspace = true }
 vti-secrets = { workspace = true }
 vta-sdk = { workspace = true }
 affinidi-did-resolver-cache-sdk = { workspace = true }
+affinidi-secrets-resolver = { workspace = true }
 serde_ignored = { workspace = true }
 dtg-credentials = { workspace = true }
 affinidi-data-integrity = { workspace = true }
@@ -75,7 +76,6 @@ uuid = { workspace = true }
 qrcode = { workspace = true }
 
 [dev-dependencies]
-affinidi-secrets-resolver = { workspace = true }
 # HTTPS for the in-process test networks and inboxes (tests/support/tls.rs).
 rcgen = "0.14"
 rustls = "0.23"

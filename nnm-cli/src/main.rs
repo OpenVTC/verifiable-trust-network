@@ -758,6 +758,24 @@ async fn admin_command(
             Ok(())
         }
         Command::Memberships(cmd) => memberships(&nnm, cmd).await,
+        // A registry with no HTTPS query surface is asked through the network.
+        Command::Registry(cmd) if !registry::is_direct(&info) => match cmd {
+            registry::RegistryCommand::Check { did } => {
+                let answer = nnm
+                    .call::<specs::registry::check::v0_1::Payload>(json!({ "did": did }))
+                    .await?;
+                registry::print_relayed_check(&answer);
+                Ok(())
+            }
+            registry::RegistryCommand::Status | registry::RegistryCommand::Records => {
+                let records = matches!(cmd, registry::RegistryCommand::Records);
+                let answer = nnm
+                    .call::<specs::registry::status::v0_1::Payload>(json!({}))
+                    .await?;
+                registry::print_relayed_status(&answer, records);
+                Ok(())
+            }
+        },
         Command::Registry(cmd) => {
             let entries = match cmd {
                 registry::RegistryCommand::Records => Some(

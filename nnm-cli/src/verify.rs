@@ -21,11 +21,15 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::{Value, json};
 use vti_vtn::tasks::TRUST_TASKS_PATH;
-use vti_vtn::verify::{AUTHENTICATION, KeyResolver, verify_document, verify_signed_by};
+use vti_vtn::verify::{
+    ASSERTION_METHOD, AUTHENTICATION, KeyResolver, verify_document, verify_signed_by,
+};
 use vti_vtn::{ClientError, CredentialState, StatusChecker, VtnClient};
 
 /// The `vtn/entries/show` Type URI.
 const ENTRIES_SHOW: &str = "https://trusttasks.org/spec/vtn/entries/show/0.1";
+/// The `vtn/registry/check` Type URI: the network relays the registry's signed answer.
+const REGISTRY_CHECK: &str = "https://trusttasks.org/spec/vtn/registry/check/0.1";
 
 /// The registry resource and actions a network publishes under (`docs/verifying.md`).
 pub const RESOURCE: &str = "vtn";
@@ -108,6 +112,10 @@ pub struct Report {
     pub network_says: Option<String>,
     pub registry: RegistryAnswer,
     pub registry_url: Option<String>,
+    /// How the registry was asked: `direct` (its HTTPS query URL) or `relayed` (through the
+    /// network, `vtn/registry/check`, for a registry with no HTTPS), when it was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_via: Option<&'static str>,
     pub checks: Vec<Check>,
 }
 
@@ -137,10 +145,12 @@ impl Report {
                 RegistryAnswer::NotPublished => "no registry published",
                 RegistryAnswer::Unreachable => "unreachable",
             },
-            self.registry_url
-                .as_deref()
-                .map(|u| format!(" ({u})"))
-                .unwrap_or_default()
+            match (self.registry_via, self.registry_url.as_deref()) {
+                (Some("relayed"), _) =>
+                    " (relayed by the network: weaker than asking directly)".to_string(),
+                (_, Some(u)) => format!(" ({u})"),
+                _ => String::new(),
+            }
         );
         let _ = writeln!(out);
         for c in &self.checks {
@@ -375,10 +385,26 @@ impl Verifier {
                     query_url: u.to_string(),
                 })
         });
-        let registry_answer = match (&target, network.is_empty()) {
-            (Some(t), false) => self.ask_registry(&t.query_url, &network, did).await,
-            (Some(_), true) => RegistryAnswer::Unreachable,
-            (None, _) => RegistryAnswer::NotPublished,
+        // No HTTPS query URL, but a registry named: ask through the network.
+        let relay_registry = profile
+            .filter(|_| target.is_none())
+            .and_then(|p| p["trustRegistry"]["did"].as_str())
+            .map(str::to_string);
+        let mut registry_via = None;
+        let mut relay_note = None;
+        let registry_answer = match (&target, &relay_registry, network.is_empty()) {
+            (Some(t), _, false) => {
+                registry_via = Some("direct");
+                self.ask_registry(&t.query_url, &network, did).await
+            }
+            (None, Some(reg), false) => {
+                registry_via = Some("relayed");
+                let (answer, note) = self.relay_registry(&url, &network, reg, did).await;
+                relay_note = Some(note);
+                answer
+            }
+            (Some(_), _, true) | (None, Some(_), true) => RegistryAnswer::Unreachable,
+            (None, None, _) => RegistryAnswer::NotPublished,
         };
         let publishes_listed = profile
             .and_then(|p| p["trustRegistry"]["publishes"].as_str())
@@ -395,7 +421,9 @@ impl Verifier {
                 checks.add(
                     "trust registry",
                     Outcome::Unknown,
-                    "the registry could not be asked",
+                    relay_note
+                        .clone()
+                        .unwrap_or_else(|| "the registry could not be asked".to_string()),
                 );
             }
             a => {
@@ -414,6 +442,10 @@ impl Verifier {
                     RegistryAnswer::Member => "holds (did, network, member, vtn)",
                     RegistryAnswer::Listed => "holds (did, network, lists, vtn): listed only",
                     _ => "holds no record for it",
+                };
+                let said = match &relay_note {
+                    Some(note) => format!("{said} ({note})"),
+                    None => said.to_string(),
                 };
                 if agrees {
                     checks.add("trust registry", Outcome::Pass, said);
@@ -436,6 +468,7 @@ impl Verifier {
             network_says: says,
             registry: registry_answer,
             registry_url: target.map(|t| t.query_url),
+            registry_via,
             checks: checks.0,
         }
     }
@@ -576,6 +609,102 @@ impl Verifier {
             Evidence::NotListed
         };
         (state, evidence)
+    }
+
+    /// The registry's answer relayed by the network (`vtn/registry/check`), for a registry with
+    /// no HTTPS query surface. Only the registry's own signed answer counts: its proof must
+    /// verify against the registry's DID, resolved here, and the member / listed decision is
+    /// read from the records it carries, not from the network's summary. Anything less is
+    /// indeterminate. The second value says how it was had, for the report.
+    async fn relay_registry(
+        &self,
+        url: &str,
+        network: &str,
+        registry: &str,
+        did: &str,
+    ) -> (RegistryAnswer, String) {
+        let doc = json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": REGISTRY_CHECK,
+            "recipient": network,
+            "issuedAt": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "payload": { "did": did },
+        });
+        let relayed = match self
+            .http
+            .post(format!("{url}{TRUST_TASKS_PATH}"))
+            .json(&doc)
+            .send()
+            .await
+        {
+            Ok(res) => res.json::<Value>().await.unwrap_or(Value::Null),
+            Err(e) => {
+                return (
+                    RegistryAnswer::Unreachable,
+                    format!("relayed by the network: no answer ({e})"),
+                );
+            }
+        };
+        let p = &relayed["payload"];
+        if relayed["type"] != format!("{REGISTRY_CHECK}#response") {
+            let code = p["code"].as_str().unwrap_or("no answer");
+            return (
+                RegistryAnswer::Unreachable,
+                format!("relayed by the network: it did not relay ({code})"),
+            );
+        }
+        if p["reachable"] != true {
+            return (
+                RegistryAnswer::Unreachable,
+                format!(
+                    "relayed by the network: it could not reach the registry ({})",
+                    p["reason"].as_str().unwrap_or("no reason given")
+                ),
+            );
+        }
+        let answer = &p["answer"];
+        if answer["issuer"].as_str() != Some(registry) {
+            return (
+                RegistryAnswer::Unreachable,
+                "relayed by the network, but not answered by the registry it names".into(),
+            );
+        }
+        // The registry signs its replies for `authentication`; accept `assertionMethod` too.
+        let signed = match verify_document(answer, registry, AUTHENTICATION, self.resolver.as_ref())
+            .await
+        {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                verify_document(answer, registry, ASSERTION_METHOD, self.resolver.as_ref()).await
+            }
+        };
+        if let Err(e) = signed {
+            return (
+                RegistryAnswer::Unreachable,
+                format!("relayed by the network; the registry's signature does not verify ({e})"),
+            );
+        }
+        let records = answer["payload"]["records"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let holds = |action: &str| {
+            records.iter().any(|r| {
+                r["entityId"] == did
+                    && r["authorityId"] == network
+                    && r["action"] == action
+                    && r["resource"] == RESOURCE
+                    && r["authorized"] == true
+            })
+        };
+        let note = "relayed by the network; signed by the registry".to_string();
+        if holds(ACTION_MEMBER) {
+            (RegistryAnswer::Member, note)
+        } else if holds(ACTION_LISTED) {
+            (RegistryAnswer::Listed, note)
+        } else {
+            (RegistryAnswer::NotFound, note)
+        }
     }
 
     /// TRQP `POST <base>/authorization` for `(did, network, action, vtn)`: the member record,

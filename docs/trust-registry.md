@@ -5,7 +5,7 @@ already trusts the registry then asks "has this network authorised X as a `membe
 speaking `vtn/*`, and without taking the network's word for it. The network stays the
 source of truth: every record is derived from an entry, and changes with it.
 
-Design: `docs/vtn-design.md` §7. Assumption: A22.
+Design: `docs/vtn-design.md` §7. Assumption: A23.
 
 ## What is published
 
@@ -67,9 +67,12 @@ One registry serves the VTC and the VTN: each writer writes only under its own D
 - **`ACL_MODE`**: with `ExplicitDeny` (the default) anyone can query; with `ExplicitAllow`
   only the readers you allow can, and a verifier you did not allow gets no answer. The
   records are meant for third parties, so `ExplicitDeny` is usual.
-- **`ENABLE_REST=true`** and **`TR_PUBLIC_URL`**: the public query surface `query_url` names.
-- **`CORS_ALLOWED_ORIGINS`**: add this network's origin (`https://vtn.example.org`) so its
-  landing page can query the registry from a visitor's browser.
+- **`ENABLE_REST=true`** and **`TR_PUBLIC_URL`**, *only if the registry serves HTTPS*: the
+  public query surface `query_url` names. A DIDComm/TSP-only registry has none: leave
+  `query_url` unset.
+- **`CORS_ALLOWED_ORIGINS`**, with HTTPS only: add this network's origin
+  (`https://vtn.example.org`) so its landing page can query the registry from a visitor's
+  browser.
 - **Version**: registries 0.29 and later speak `registry/record/*/0.3` and
   `registry/authorization/0.2`; `nnm` falls back to `authorization/0.1` for older ones.
 
@@ -118,40 +121,83 @@ failed) and kept in the `registry` keyspace.
 ## Writes
 
 The Affinidi registry accepts record writes (`registry/record/put`, `/delete`) over **DIDComm
-or TSP** only, from a DID in `ADMIN_DIDS`. Its HTTPS binding is read-only. This network has
-no mediator session yet (the same gap as A15's delivery transports), so today:
+or TSP** only, from a DID in `ADMIN_DIDS`. Its HTTPS binding is read-only, and a registry
+may serve no HTTPS at all. So the network writes over its own **DIDComm session**:
 
-- the projection is computed, reconciled and reported, and **nothing is written**: the log
-  says so once per reconcile (`writer = none`), and `nnm registry records` shows every member
-  as `missing`;
-- reads work now, over HTTPS: `nnm registry …`, the landing page, any TRQP client.
+```toml
+[messaging]
+mediator_did = "did:webvh:QmMediator…:mediator.example.org"   # the network's mediator
+request_timeout_secs = 20                                     # wait for each answer
+```
 
-Writing needs one of: a DIDComm/TSP session for the network's identity (a mediator in
-`vtn.toml`, a `DIDCommMessaging` service in its DID document) plugged in as the
-`registry::RegistryWriter`; or the registry accepting signed `registry/record/*` writes over
-its HTTPS binding, whose write checks (proof by an `ADMIN_DIDS` issuer, for
-`authentication`, under its own authority, deduplicated by id) do not depend on the
-transport. Until then, records can be written by the registry operator with the registry's
-own admin tooling, under this network's DID as authority.
+or `[messaging]` in the `vtn setup` file, with the same keys. Then:
+
+- `vtn` holds one socket at the mediator as its own DID (`vti_common::host_session`, the
+  session the witness and the ballot box run), reconnecting with backoff, and closes it on
+  shutdown.
+- Each write is a `registry/record/put/0.3` or `delete/0.2` Trust Task, and the reconcile's
+  list is `registry/record/query/0.3` under this network's authority. Each names the registry
+  as `recipient`, carries `issuedAt`, and is signed for `authentication` by the network's
+  key, authcrypted as the network: what the registry checks before it takes a write from a
+  DID in `ADMIN_DIDS`. The registry signs every answer.
+- The first reconcile waits for the session to connect, and another runs each time it comes
+  back. A reconcile that could not write everything is retried after 30 s, backing off to
+  10 minutes; a complete one waits `sync_interval_secs`.
+- Without `[messaging]` nothing is written: the projection is computed and reported
+  (`writer = none` in the log), and `nnm registry records` shows every member as `missing`.
+
+What has to be in place:
+
+1. **The network's DID** routes DIDComm through the mediator: a `DIDCommMessaging` service
+   and a key-agreement key. The `vtn-host` template has the key (`#key-1`) and, from the
+   setup file's `[messaging]`, the service (`SERVICE_DIDCOMM`). For a DID already minted, add
+   the service on the VTA and publish the new log entry:
+
+   ```json
+   {
+     "id": "<network DID>#didcomm",
+     "type": "DIDCommMessaging",
+     "serviceEndpoint": [{ "uri": "<mediator DID>", "accept": ["didcomm/v2"] }]
+   }
+   ```
+
+   with `pnm dids edit <network DID>`, as for the `TrustRegistry` referral below.
+2. **The mediator** accepts the network's DID: the same mediator the VTC uses works, as long
+   as its ACL lets this DID connect (an `ExplicitAllow` mediator needs it added). The mediator
+   authenticates the network by resolving its DID, so the DID must resolve first.
+3. **The registry** has the network's DID in `ADMIN_DIDS` (below) and serves DIDComm through
+   a mediator the network can reach.
+4. **The keys**: the session uses the identity's provisioned keys from the `[secrets]` store
+   (its Ed25519 and X25519 keys), so `[messaging]` needs a provisioned `[identity]`.
 
 ## Checking records
 
-Anyone, with the network's URL:
-
 ```sh
-nnm registry status          # the registry, its query URL, and whether it answers
+nnm registry status          # the registry, the writer, the last reconcile, and whether it answers
 nnm registry check <did>     # does the registry say <did> is a member, or listed?
-nnm registry records         # every entry against the registry: ok, missing, stale (administrators)
+nnm registry records         # every record against the projection: ok, missing, stale, wrong (administrators)
 ```
 
-Every answer must name this network as its authority, or `nnm` refuses it. Without `nnm`,
-any TRQP client asks the registry directly:
+How `nnm` asks depends on the registry:
 
-```sh
-curl -s https://registry.example.org/authorization -H 'content-type: application/json' -d '{
-  "entity_id": "<party DID>", "authority_id": "<network DID>",
-  "action": "member", "resource": "vtn" }'
-```
+- **It serves HTTPS** (`query_url` set): `nnm` asks the registry itself, over TRQP, and
+  refuses an answer that does not name this network as its authority. Without `nnm`, any
+  TRQP client does the same:
+
+  ```sh
+  curl -s https://registry.example.org/authorization -H 'content-type: application/json' -d '{
+    "entity_id": "<party DID>", "authority_id": "<network DID>",
+    "action": "member", "resource": "vtn" }'
+  ```
+
+- **It speaks DIDComm or TSP only** (no `query_url`): the network asks for you, over its
+  session. `vtn/registry/check` (anyone) returns what the registry answered **and the
+  registry's own signed answer document**; `vtn/registry/status` (administrators) returns
+  the writer, whether it is connected, the last reconcile, and every record compared with
+  the projection. `nnm registry check` says whether the relayed answer is signed by the
+  registry's DID. A relayed answer is weaker than asking directly (the network chose when
+  to ask), so `nnm verify` believes it only when that signature verifies against the
+  registry's DID, resolved independently, and reads the records itself.
 
 ## Privacy
 

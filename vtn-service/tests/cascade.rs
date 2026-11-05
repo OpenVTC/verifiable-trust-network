@@ -170,6 +170,7 @@ async fn live_with(
         rooms,
         identity: None,
         secrets: None,
+        messaging: None,
         registry: None,
     };
     vtn_service::init_dev(&config).unwrap();
