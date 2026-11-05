@@ -435,3 +435,94 @@ async fn the_sign_in_link_is_served_as_a_qr_code() {
     let (status, _, _) = get("/v1/sign-in/qr.svg".to_string()).await;
     assert_eq!(status, 400);
 }
+
+/// Sign `k_b` in as `approver` through the whole exchange; returns once `redeem` succeeds.
+async fn sign_in(net: &Net, k_b: &Identity, approver: &Identity) {
+    let k_a = Identity::generate();
+    let (id, step2) = up_to_prove(net, k_b, &k_a, approver).await;
+    let scope = ok(&step2)["signingScope"].clone();
+    let grant = net
+        .oob(
+            approver,
+            "grant",
+            json!({
+                "requestId": id,
+                "decision": "approve",
+                "sessionKey": k_b.did(),
+                "approverKey": k_a.did(),
+                "origin": BASE_URL,
+                "contextDigest": vti_oob_server::context_digest(&step2).unwrap(),
+                "sessionEndsAt": (Utc::now() + Duration::hours(1)).to_rfc3339(),
+                "signingScope": scope,
+            }),
+            None,
+            ASSERTION_METHOD,
+        )
+        .await;
+    let responded = net
+        .post(
+            &net.oob(
+                &k_a,
+                "respond",
+                json!({ "grant": grant }),
+                None,
+                AUTHENTICATION,
+            )
+            .await,
+        )
+        .await;
+    assert_eq!(ok(&responded)["status"], "approved", "{responded:#}");
+    let redeemed = net
+        .post(
+            &net.oob(
+                k_b,
+                "redeem",
+                json!({ "requestId": id }),
+                None,
+                AUTHENTICATION,
+            )
+            .await,
+        )
+        .await;
+    ok(&redeemed);
+}
+
+/// The landing page's Invite tab: an administrator's browser key lists a community and reads
+/// it back; a member's browser key, under the same scope, lists no one.
+#[tokio::test]
+async fn an_administrators_page_key_invites_and_a_members_does_not() {
+    vti_oob_server::set_redeem_hold_for_tests(std::time::Duration::from_millis(100));
+    let net = network().await;
+    let msf = Identity::generate();
+    joins(&net, &msf).await;
+
+    let admin_key = Identity::generate();
+    sign_in(&net, &admin_key, &net.operator).await;
+    let invited = Identity::generate();
+    let created = net
+        .task::<specs::listings::create::v0_1::Payload>(
+            &admin_key,
+            json!({ "did": invited.did(), "kind": "community", "label": "Westmead" }),
+        )
+        .await;
+    assert_eq!(ok(&created)["entry"]["state"], "listed", "{created:#}");
+    let shown = net
+        .task::<specs::listings::show::v0_1::Payload>(&admin_key, json!({ "did": invited.did() }))
+        .await;
+    assert_eq!(ok(&shown)["entry"]["label"], "Westmead");
+    // Still nothing administrative beyond inviting.
+    let removed = net
+        .task::<specs::listings::remove::v0_1::Payload>(&admin_key, json!({ "did": invited.did() }))
+        .await;
+    assert_eq!(code(&removed), "permissionDenied", "{removed:#}");
+
+    let member_key = Identity::generate();
+    sign_in(&net, &member_key, &msf).await;
+    let refused = net
+        .task::<specs::listings::create::v0_1::Payload>(
+            &member_key,
+            json!({ "did": Identity::generate().did(), "kind": "community" }),
+        )
+        .await;
+    assert_eq!(code(&refused), "permissionDenied", "{refused:#}");
+}
