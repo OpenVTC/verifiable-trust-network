@@ -389,6 +389,16 @@ async fn world_health_network() {
     for role in ["listing", "grant", "acknowledgement"] {
         assert!(roles.contains(&role), "{role} in {roles:?}");
     }
+    // The acknowledgement is the member's credential, checked against the member's own
+    // status (it carries none here, so its validity window is its control): not left
+    // `unchecked` because this network did not issue it.
+    let ack = graph["graph"]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["role"] == "acknowledgement" && (e["target"] == au || e["source"] == au))
+        .unwrap();
+    assert_eq!(ack["status"], "valid", "{ack:#}");
     // Including exited entries is for administrators.
     let code = whn
         .task::<graph_show::Payload>(None, json!({ "includeExited": true }))
