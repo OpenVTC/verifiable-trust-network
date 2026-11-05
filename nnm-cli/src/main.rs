@@ -64,6 +64,22 @@ enum Command {
         #[command(flatten)]
         profile: ProfileArgs,
     },
+    /// Invite a community or network: list it (unless it is listed already), then print
+    /// the invitation its administrator accepts. A community accepts in its operator
+    /// console (Networks, Join), which `--console` links to directly.
+    Invite {
+        did: String,
+        #[arg(long, value_enum, default_value = "community")]
+        kind: Kind,
+        #[arg(long)]
+        label: Option<String>,
+        /// The community's operator console (its public URL). Default: `--url`, or the
+        /// URL already on its entry.
+        #[arg(long)]
+        console: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
     /// Edit an entry's directory profile (name, description, URL, tags). Changes only what
     /// you name (an empty value clears it); re-issues no credential.
     Profile {
@@ -433,6 +449,97 @@ impl Nnm {
     }
 }
 
+/// Where a community's operator console takes an invitation: its Networks page, with the
+/// network to join (VTI `vtc-service/admin-ui`).
+const CONSOLE_JOIN_PATH: &str = "/admin/networks";
+
+/// Percent-encode a query value: everything but RFC 3986 unreserved characters.
+fn query_value(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// The deep link into a community's console that opens the join for this network.
+fn console_link(console: &str, network_url: &str, network_did: &str) -> String {
+    format!(
+        "{}{CONSOLE_JOIN_PATH}?join={}&network={}",
+        console.trim_end_matches('/'),
+        query_value(network_url),
+        query_value(network_did)
+    )
+}
+
+/// The invitation to print for the listed party's administrator.
+fn invitation(
+    network_url: &str,
+    network_did: &str,
+    entry: &Value,
+    roles: &Value,
+    kind: Kind,
+    console: Option<&str>,
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let who = entry["label"]
+        .as_str()
+        .or(entry["did"].as_str())
+        .unwrap_or("?");
+    match entry["state"].as_str() {
+        Some("listed") => {
+            let _ = writeln!(
+                out,
+                "{who} is listed, not yet acknowledged. It becomes a member when it accepts."
+            );
+        }
+        state => {
+            let _ = writeln!(out, "{who} is {}.", state.unwrap_or("?"));
+        }
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Send this to its administrator:");
+    let _ = writeln!(out, "  network:  {network_url}");
+    let _ = writeln!(out, "  DID:      {network_did}");
+    let required: Vec<&str> = roles
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["required"] == true)
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    if !required.is_empty() {
+        let _ = writeln!(
+            out,
+            "  roles:    {} (assign a group to each)",
+            required.join(", ")
+        );
+    }
+    match (kind, console) {
+        (Kind::Community, Some(console)) => {
+            let _ = writeln!(
+                out,
+                "  accept:   {}",
+                console_link(console, network_url, network_did)
+            );
+        }
+        (Kind::Community, None) => {
+            let _ = writeln!(
+                out,
+                "  accept:   in its operator console, Networks, Join, with the network URL above"
+            );
+        }
+        (Kind::Network, _) => {
+            let _ = writeln!(out, "  accept:   nnm memberships join {network_url}");
+        }
+    }
+    out
+}
+
 /// The DID the network at `url` answers as, checked against `expected` when given.
 async fn network_at(url: &str, expected: Option<String>) -> anyhow::Result<String> {
     let info = VtnClient::new(url.trim_end_matches('/')).profile().await?;
@@ -737,6 +844,53 @@ async fn admin_command(
             );
             Ok(())
         }
+        Command::Invite {
+            did,
+            kind,
+            label,
+            console,
+            profile,
+        } => {
+            let shown = nnm
+                .call::<specs::listings::show::v0_1::Payload>(json!({ "did": did }))
+                .await
+                .ok();
+            let pending = shown
+                .as_ref()
+                .is_some_and(|s| s["entry"]["state"] == "listed");
+            let entry = if pending {
+                eprintln!("{did} is listed already; not listing it again");
+                shown.map(|s| s["entry"].clone()).unwrap_or_default()
+            } else {
+                let mut payload = profile.json();
+                payload["did"] = json!(did);
+                payload["kind"] = json!(kind.as_str());
+                if let Some(label) = label {
+                    payload["label"] = json!(label);
+                }
+                nnm.call::<specs::listings::create::v0_1::Payload>(payload)
+                    .await?["entry"]
+                    .clone()
+            };
+            let roles = nnm
+                .call::<specs::roles::list::v0_1::Payload>(json!({}))
+                .await?;
+            let console = console
+                .or(profile.url.clone())
+                .or_else(|| entry["profile"]["url"].as_str().map(str::to_string));
+            print!(
+                "{}",
+                invitation(
+                    &net.url,
+                    &net.did,
+                    &entry,
+                    &roles["roles"],
+                    kind,
+                    console.as_deref()
+                )
+            );
+            Ok(())
+        }
         Command::Suspend { did, reason } => {
             transition::<specs::listings::suspend::v0_1::Payload>(&nnm, &did, reason).await
         }
@@ -891,4 +1045,61 @@ where
         answer["entry"]["state"].as_str().unwrap_or("?")
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+
+    #[test]
+    fn the_console_link_carries_the_network_url_and_did() {
+        assert_eq!(
+            console_link(
+                "https://vtc.example/",
+                "https://vtn.example",
+                "did:webvh:Qm1:vtn.example"
+            ),
+            "https://vtc.example/admin/networks?join=https%3A%2F%2Fvtn.example\
+             &network=did%3Awebvh%3AQm1%3Avtn.example"
+        );
+    }
+
+    #[test]
+    fn the_invitation_names_the_required_roles_and_how_to_accept() {
+        let entry = json!({ "did": "did:web:msf", "label": "MSF", "state": "listed" });
+        let roles = json!([
+            { "name": "admins", "required": true },
+            { "name": "news", "required": false },
+        ]);
+        let text = invitation(
+            "https://vtn.example",
+            "did:web:vtn",
+            &entry,
+            &roles,
+            Kind::Community,
+            Some("https://msf.example"),
+        );
+        assert!(
+            text.contains("MSF is listed, not yet acknowledged"),
+            "{text}"
+        );
+        assert!(text.contains("roles:    admins (assign"), "{text}");
+        assert!(!text.contains("news"), "{text}");
+        assert!(
+            text.contains("https://msf.example/admin/networks?join="),
+            "{text}"
+        );
+        let net = invitation(
+            "https://vtn.example",
+            "did:web:vtn",
+            &entry,
+            &json!([]),
+            Kind::Network,
+            None,
+        );
+        assert!(
+            net.contains("nnm memberships join https://vtn.example"),
+            "{net}"
+        );
+    }
 }
