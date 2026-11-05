@@ -61,6 +61,9 @@ pub struct Network {
     pub(crate) index_cache:
         Mutex<std::collections::HashMap<String, (DateTime<Utc>, vti_vtn::index::NetworkIndex)>>,
     pub(crate) write: Mutex<()>,
+    /// Woken after every entry change, so the trust-registry projection follows it
+    /// (`crate::registry::Syncer`).
+    pub(crate) registry_nudge: Arc<tokio::sync::Notify>,
 }
 
 impl Network {
@@ -97,6 +100,7 @@ impl Network {
             settings,
             index_cache: Mutex::default(),
             write: Mutex::new(()),
+            registry_nudge: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -632,6 +636,7 @@ impl Network {
             })
             .await?;
         tracing::info!(did = %entry.did, event = event.as_str(), state = %entry.state, actor, "entry updated");
+        self.registry_nudge.notify_one();
         Ok(())
     }
 }

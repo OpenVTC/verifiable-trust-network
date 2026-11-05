@@ -25,6 +25,8 @@ getrandom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+# `nnm registry`: TRQP queries to the trust registry over its HTTPS binding.
+trql-client = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

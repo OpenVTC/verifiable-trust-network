@@ -170,6 +170,7 @@ async fn live_with(
         rooms,
         identity: None,
         secrets: None,
+        registry: None,
     };
     vtn_service::init_dev(&config).unwrap();
     let state = vtn_service::build_state_with(&config, Arc::new(VtaKeyResolver::offline()))

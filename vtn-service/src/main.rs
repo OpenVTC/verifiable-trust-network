@@ -79,6 +79,22 @@ async fn main() -> anyhow::Result<()> {
             state
                 .network
                 .spawn_retry_worker(std::time::Duration::from_secs(15));
+            // The trust-registry projection: reconciled now (which adds existing members),
+            // after every entry change, and every `sync_interval_secs`.
+            if let Some(registry) = &config.registry {
+                let syncer = std::sync::Arc::new(vtn_service::registry::Syncer::new(
+                    state.network.clone(),
+                    std::sync::Arc::new(vtn_service::registry::NoWriteTransport),
+                    registry.clone(),
+                ));
+                tracing::info!(
+                    registry = %registry.did,
+                    publish = registry.publish.as_str(),
+                    writer = syncer.writer().describe(),
+                    "trust registry projection on"
+                );
+                syncer.spawn();
+            }
             // Accepted Trust Task ids are kept for their acceptance window, then dropped.
             let accepted = state.accepted.clone();
             let oob = state.clone();

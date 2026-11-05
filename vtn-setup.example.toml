@@ -31,6 +31,12 @@ backend = "keyring"            # the OS credential store; a headless server usua
 [directory]
 visibility = "members"         # "public" | "members" | "admins"
 
+# The trust registry to publish membership to: written to [registry], and named in the
+# DID document as a TrustRegistry referral (docs/trust-registry.md).
+# [trust_registry]
+# did = "did:webvh:QmRegistry:registry.example.org"
+# query_url = "https://registry.example.org"
+
 [network]
 name        = "World Health Network"
 description = "Curated network of national and regional health networks and communities"
