@@ -175,6 +175,16 @@
   .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); color: var(--text); border-radius: var(--radius-sm);
     padding: 10px; overflow: auto; max-height: 260px; margin: 6px 0 0; }
   .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
+  dialog.cred { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  dialog.cred::backdrop { background: rgba(0, 0, 0, .35); }
+  .cred-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .cred-head h3 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
+  .cred-body { padding: 14px 18px 18px; }
+  .cred-body p { margin: 0 0 10px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .cred-body pre { font-family: var(--mono); font-size: 11.5px; background: var(--bg); border-radius: var(--radius-sm);
+    padding: 12px; margin: 0; overflow: auto; max-height: min(60vh, 520px); white-space: pre; }
+  .cred-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
   /* ---------------------------------------------------------------- sign-in */
   .notice { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
@@ -360,6 +370,21 @@
       </div>
     </div>
   </section>
+
+  <dialog class="cred" id="cred" aria-labelledby="cred-title">
+    <div class="cred-head">
+      <h3 id="cred-title">Credential</h3>
+      <button class="btn ghost" type="button" id="cred-close" aria-label="Close">Close</button>
+    </div>
+    <div class="cred-body">
+      <p id="cred-sub"></p>
+      <pre id="cred-json"></pre>
+      <div class="cred-actions">
+        <button class="btn" type="button" id="cred-copy">Copy JSON</button>
+        <button class="btn" type="button" id="cred-download">Download</button>
+      </div>
+    </div>
+  </dialog>
 
   <footer>
     <span>Listing is one-sided: only <b>members</b> have acknowledged their entry (VTI-VTN-011, 013).</span>
@@ -670,10 +695,46 @@
     const links = el("div", { class: "links" }, el("span", { class: "did" }, r.did));
     const site = r.url && safeHref(r.url);
     if (site) links.append(el("a", { href: site, rel: "noopener noreferrer" }, r.kind === "network" ? "Visit network" : "Website"));
-    if (r.listingId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.listingId) }, "Listing credential"));
-    if (r.grantId && !(r.path && r.path.length)) links.append(el("a", { href: "/v1/credentials/" + encodeURIComponent(r.grantId) }, "Membership credential"));
+    if (!(r.path && r.path.length)) {
+      if (r.listingId) links.append(credLink(r, "listing", r.listingId, "Listing credential"));
+      if (r.grantId) links.append(credLink(r, "grant", r.grantId, "Membership credential"));
+      if (r.acknowledged) links.append(credLink(r, "acknowledgement", null, "Acknowledgement"));
+    }
     li.append(links);
     return li;
+  }
+
+  // A credential of an entry. A public directory serves it by URL; any other is read with
+  // `vtn/entries/show`, signed by this page's key (A21), and shown here.
+  function credLink(r, which, id, label) {
+    const href = id ? "/v1/credentials/" + encodeURIComponent(id) : "#";
+    const a = el("a", { href }, label);
+    a.addEventListener("click", (e) => {
+      if (VISIBILITY === "public" && id) return;
+      e.preventDefault();
+      showCredential(r, which, label);
+    });
+    return a;
+  }
+
+  let credText = "", credName = "credential.json";
+  async function showCredential(r, which, label) {
+    const dlg = $("cred");
+    $("cred-title").textContent = label;
+    $("cred-sub").textContent = r.label ? `${r.label} · ${r.did}` : r.did;
+    $("cred-json").textContent = "Loading…";
+    if (!dlg.open) dlg.showModal();
+    const res = await task("vtn/entries/show", { did: r.did });
+    const cred = res.ok && res.payload.entry ? res.payload.entry[which] : null;
+    if (!cred) {
+      credText = "";
+      $("cred-json").textContent = res.ok ? "This entry has no such credential."
+        : (res.error && res.error.message) || `The network did not answer (${res.code}).`;
+      return;
+    }
+    credText = JSON.stringify(cred, null, 2);
+    credName = `${which}-${(r.label || r.did).replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60)}.json`;
+    $("cred-json").textContent = credText;
   }
 
   function matches(r) {
@@ -901,6 +962,7 @@
   // The approver's key may list a party (`vtn/listings/create`), as `nnm invite` does; the
   // network decides per task whether the approver is an administrator.
   const CONSOLE_JOIN_PATH = "/admin/networks";
+  let VISIBILITY = "public";
   let ROLES = [];
   let invitationText = "";
 
@@ -1006,6 +1068,7 @@
     expireSignInAt();
     if (!SIGN_IN || signedIn()) $("wallet-sign-in").classList.add("hidden");
     const visibility = info?.directory?.visibility || "public";
+    VISIBILITY = visibility;
     if (!info?.directory?.federateDepth) $("fed-wrap").classList.add("hidden");
     const summary = await task("vtn/directory/summary");
     renderStats(summary.ok ? summary.payload.summary : null);
@@ -1031,6 +1094,21 @@
   bindSeg("kind", "kind");
   $("wallet-sign-in").addEventListener("click", startSignIn);
   $("invite-form").addEventListener("submit", invite);
+  $("cred-close").addEventListener("click", () => $("cred").close());
+  $("cred").addEventListener("click", (e) => { if (e.target === $("cred")) $("cred").close(); });
+  $("cred-copy").addEventListener("click", async () => {
+    const b = $("cred-copy");
+    if (!credText) return;
+    try { await navigator.clipboard.writeText(credText); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => (b.textContent = "Copy JSON"), 1500);
+  });
+  $("cred-download").addEventListener("click", () => {
+    if (!credText) return;
+    const url = URL.createObjectURL(new Blob([credText], { type: "application/json" }));
+    const a = el("a", { href: url, download: credName });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   $("inv-copy").addEventListener("click", async () => {
     const b = $("inv-copy");
     try { await navigator.clipboard.writeText(invitationText); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
