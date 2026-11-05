@@ -104,7 +104,10 @@
   .detail pre { font-family: var(--mono); font-size: 11px; background: var(--bg); border-radius: 8px; padding: 10px;
     overflow: auto; max-height: 260px; margin: 6px 0 0; }
   .detail summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
-  .session { font-size: 13px; color: var(--muted); margin: -10px 0 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .session { font-size: 13px; color: var(--muted); margin: 14px 0 18px; padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface); display: flex; gap: 4px 10px; align-items: center; flex-wrap: wrap; }
+  .session > * { min-width: 0; }
+  .session b { color: var(--text); font-weight: 600; }
   .signin { margin-top: 12px; }
   .signin .link { font-family: var(--mono); font-size: 12px; word-break: break-all; background: var(--bg);
     border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
@@ -324,8 +327,9 @@
     if (!signedIn()) { box.classList.add("hidden"); return; }
     const out = el("button", { class: "copy", type: "button" }, "Sign out");
     out.addEventListener("click", async () => { await forget(); location.reload(); });
-    box.replaceChildren("Signed in as ", el("b", {}, signer.name || signer.approver), " until ",
-      new Date(signer.endsAt * 1000).toLocaleTimeString(), out);
+    const who = signer.name ? el("b", {}, signer.name) : el("span", { class: "did" }, signer.approver);
+    box.replaceChildren(el("span", {}, "Signed in as"), who,
+      el("span", {}, "until " + new Date(signer.endsAt * 1000).toLocaleTimeString()), out);
     box.classList.remove("hidden");
   }
 
