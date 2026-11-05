@@ -129,6 +129,7 @@ are on [trusttasks.org](https://trusttasks.org/spec/vtn/).
 | A parent network this one joined | `relay/deliver` |
 | A person | `rooms/{list,pass}` |
 | A reader the directory admits | `directory/{search,federated,summary}`, `graph/{show,member}`, `entries/show`, `roles/list`, `rooms/list` (unsigned under `visibility = "public"`) |
+| An administrator's wallet sign-in on the landing page | `listings/{create,list,show}` (the Invite tab), plus the reads above |
 | An administrator | `listings/{create,update,suspend,reinstate,remove,list,show}`, `audit/list`, `groups/list`, `broadcasts/{send,list,show}`, `outbox/{list,retry}`, `memberships/{list,join,repudiate,leave,groups/add}` |
 
 Only what is fetched by URL stays a plain `GET`:

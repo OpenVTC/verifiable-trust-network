@@ -97,6 +97,22 @@
   .tabs button { border: 0; background: none; font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 7px;
     color: var(--muted); cursor: pointer; }
   .tabs button[aria-selected=true] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+  .invite { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px; display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) { .invite { grid-template-columns: minmax(0, 1fr); padding: 16px; } }
+  .invite h2 { margin: 0 0 4px; font-size: 17px; }
+  .invite > div > p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+  .field { display: grid; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+  .field input, .field select, .field textarea { font: inherit; font-size: 14px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; min-width: 0; width: 100%; }
+  .field input:focus, .field select:focus, .field textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  .field small { color: var(--faint); }
+  .invitation { background: var(--surface-2); border-radius: 10px; padding: 14px; font-size: 14px; }
+  .invitation dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 10px 0 12px; }
+  .invitation dt { color: var(--muted); }
+  .invitation dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .invitation .did, .invitation a { font-family: var(--mono); font-size: 12.5px; }
+  .invite .err { color: var(--bad); font-size: 13px; margin: 8px 0 0; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin-bottom: 12px; }
   input[type=search] { flex: 1 1 260px; min-width: 0; padding: 8px 12px 8px 34px; font: inherit; font-size: 14px;
     border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text);
@@ -237,7 +253,42 @@
   <div class="tabs hidden" role="tablist" id="tabs">
     <button type="button" role="tab" aria-selected="true" data-tab="directory">Directory</button>
     <button type="button" role="tab" aria-selected="false" data-tab="graph">Trust graph</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="invite" class="hidden" id="invite-tab">Invite</button>
   </div>
+
+  <section id="invite" class="hidden" aria-label="Invite a community or network">
+    <div class="invite">
+      <form id="invite-form" autocomplete="off">
+        <h2>Invite a community or network</h2>
+        <p>Listing is one-sided: it becomes membership only when the party accepts (VTI-VTN-010, 013).</p>
+        <label class="field">DID <input id="inv-did" required placeholder="did:webvh:…" spellcheck="false"></label>
+        <label class="field">Kind
+          <select id="inv-kind"><option value="community">Community (VTC)</option><option value="network">Network (VTN)</option></select>
+        </label>
+        <label class="field">Name <input id="inv-label" placeholder="Shown in the directory"></label>
+        <label class="field">Its site <input id="inv-url" type="url" placeholder="https://…">
+          <small>A community's public URL: the invitation links into its operator console.</small></label>
+        <label class="field">Description <input id="inv-desc"></label>
+        <label class="field">Tags <input id="inv-tags" placeholder="health, humanitarian"><small>Comma-separated search terms.</small></label>
+        <button class="btn primary" type="submit" id="inv-submit">List and invite</button>
+        <p class="err hidden" id="inv-error" role="alert"></p>
+      </form>
+      <div>
+        <h2>Invitation</h2>
+        <p id="inv-hint">Fill in the party and list it. The invitation to send its administrator appears here.</p>
+        <div class="invitation hidden" id="inv-result">
+          <b id="inv-who"></b> <span class="badge" id="inv-state"></span>
+          <dl>
+            <dt>Network</dt><dd id="inv-net-url"></dd>
+            <dt>DID</dt><dd class="did" id="inv-net-did"></dd>
+            <dt>Roles</dt><dd id="inv-roles"></dd>
+            <dt>Accept</dt><dd id="inv-accept"></dd>
+          </dl>
+          <button class="btn" type="button" id="inv-copy">Copy invitation</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section id="graph" class="hidden" aria-label="Trust graph">
     <div class="graph-wrap">
@@ -773,12 +824,98 @@
 
   document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("[data-tab]").forEach((o) => o.setAttribute("aria-selected", String(o === b)));
-    const graph = b.dataset.tab === "graph";
-    $("graph").classList.toggle("hidden", !graph);
-    $("directory").classList.toggle("hidden", graph);
-    if (graph) loadGraph();
+    const tab = b.dataset.tab;
+    $("graph").classList.toggle("hidden", tab !== "graph");
+    $("directory").classList.toggle("hidden", tab !== "directory");
+    $("invite").classList.toggle("hidden", tab !== "invite");
+    if (tab === "graph") loadGraph();
   }));
   window.addEventListener("resize", () => { if (!$("graph").classList.contains("hidden")) renderGraph(); });
+
+  // ------------------------------------------------------------- invite (administrators)
+  // The approver's key may list a party (`vtn/listings/create`), as `nnm invite` does; the
+  // network decides per task whether the approver is an administrator.
+  const CONSOLE_JOIN_PATH = "/admin/networks";
+  let ROLES = [];
+  let invitationText = "";
+
+  async function enableInvite() {
+    if (!signedIn()) return;
+    const probe = await task("vtn/listings/list", {});
+    if (!probe.ok) return;
+    $("tabs").classList.remove("hidden");
+    $("invite-tab").classList.remove("hidden");
+  }
+
+  async function invite(e) {
+    e.preventDefault();
+    const err = $("inv-error"); err.classList.add("hidden");
+    const did = $("inv-did").value.trim();
+    const kind = $("inv-kind").value;
+    const label = $("inv-label").value.trim();
+    const url = $("inv-url").value.trim();
+    const description = $("inv-desc").value.trim();
+    const tags = $("inv-tags").value.split(",").map((t) => t.trim()).filter(Boolean);
+    if (!did.startsWith("did:")) { err.textContent = "Enter the party's DID."; err.classList.remove("hidden"); return; }
+    const button = $("inv-submit"); button.disabled = true;
+    try {
+      let entry = null;
+      const shown = await task("vtn/listings/show", { did });
+      if (shown.ok && shown.payload.entry && shown.payload.entry.state === "listed") {
+        entry = shown.payload.entry;
+      } else {
+        const payload = { did, kind };
+        if (label) payload.label = label;
+        if (url) payload.url = url;
+        if (description) payload.description = description;
+        if (tags.length) payload.tags = tags;
+        const created = await task("vtn/listings/create", payload);
+        if (!created.ok) {
+          err.textContent = (created.error && created.error.message) || `The network did not list ${did} (${created.code}).`;
+          err.classList.remove("hidden");
+          return;
+        }
+        entry = created.payload.entry;
+      }
+      showInvitation(entry, kind, url || (entry.profile && entry.profile.url) || "");
+    } finally { button.disabled = false; }
+  }
+
+  function showInvitation(entry, kind, site) {
+    const netUrl = location.origin;
+    const who = entry.label || entry.did;
+    const required = ROLES.filter((r) => r.required).map((r) => r.name);
+    $("inv-who").textContent = who;
+    const st = $("inv-state");
+    const [stateLabel, stateCls] = STATE_BADGE[entry.state] || [entry.state, "b-kind"];
+    st.textContent = stateLabel;
+    st.className = "badge " + stateCls;
+    $("inv-net-url").textContent = netUrl;
+    $("inv-net-did").textContent = NETWORK;
+    $("inv-roles").textContent = required.length ? required.join(", ") + " (assign a group to each)" : "None required";
+    const accept = $("inv-accept");
+    let acceptText;
+    if (kind === "community" && site && safeHref(site)) {
+      const link = site.replace(/\/+$/, "") + CONSOLE_JOIN_PATH + "?join=" + encodeURIComponent(netUrl) + "&network=" + encodeURIComponent(NETWORK);
+      accept.replaceChildren(el("a", { href: link, rel: "noopener noreferrer", target: "_blank" }, link));
+      acceptText = link;
+    } else if (kind === "community") {
+      acceptText = "In its operator console: Networks, Join a network, with the network URL above.";
+      accept.textContent = acceptText;
+    } else {
+      acceptText = "nnm memberships join " + netUrl;
+      accept.replaceChildren(el("code", {}, acceptText));
+    }
+    invitationText = [
+      `${who} is invited to join ${$("name").textContent}.`,
+      `Network: ${netUrl}`,
+      `DID: ${NETWORK}`,
+      required.length ? `Roles to assign a group to: ${required.join(", ")}` : null,
+      `Accept: ${acceptText}`,
+    ].filter(Boolean).join("\n");
+    $("inv-hint").classList.add("hidden");
+    $("inv-result").classList.remove("hidden");
+  }
 
   async function init() {
     const { body: info } = await get("/.well-known/vtn");
@@ -797,6 +934,7 @@
       $("did").title = info.did || "";
       NETWORK = info.did || null;
       SIGN_IN = info.signIn || null;
+      ROLES = Array.isArray(info.roles) ? info.roles : [];
     }
     await restore();
     sessionBar();
@@ -806,6 +944,7 @@
     const summary = await task("vtn/directory/summary");
     renderStats(summary.ok ? summary.payload.summary : null);
     await loadDirectory(visibility);
+    await enableInvite();
     if (location.hash.startsWith("#graph")) {
       document.querySelector('[data-tab="graph"]').click();
       if (location.hash === "#graph-expanded") { await loadGraph(); await expandAll(); }
@@ -825,6 +964,12 @@
   bindSeg("state", "member");
   bindSeg("kind", "kind");
   $("wallet-sign-in").addEventListener("click", startSignIn);
+  $("invite-form").addEventListener("submit", invite);
+  $("inv-copy").addEventListener("click", async () => {
+    const b = $("inv-copy");
+    try { await navigator.clipboard.writeText(invitationText); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => (b.textContent = "Copy invitation"), 1500);
+  });
   $("sign-in-copy").addEventListener("click", async () => {
     const b = $("sign-in-copy");
     try { await navigator.clipboard.writeText($("sign-in-link").textContent); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }

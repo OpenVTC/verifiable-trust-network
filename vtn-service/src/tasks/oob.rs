@@ -15,8 +15,11 @@
 //!   itself. Decided from local records only, before the DID is resolved (T15). A person
 //!   with a member community's credential has no record here; they present it with each
 //!   request instead.
-//! - **What the key may sign** ([`SIGNING_SCOPE`]): reads of the published set. Nothing
-//!   administrative: that stays with the NNM, signed by the administrator's own key.
+//! - **What the key may sign** ([`SIGNING_SCOPE`]): reads of the published set, and
+//!   inviting: listing a party and reading listings (`vtn/listings/{create,list,show}`).
+//!   The scope is the same for every approver; who may use it is decided per task, as for
+//!   any signer, so only an administrator's approval lists anyone. Suspending, removing,
+//!   broadcasts and memberships stay with the NNM, signed by the administrator's own key.
 //! - **What `redeem` issues:** a delegation of `K_b` to the approver, in the store.
 //! - **Sign-out:** `auth/revoke-session` `{ all: true }`, signed by `K_b` itself (a
 //!   delegation never covers `auth/*`), drops `K_b`'s delegation ([`revoke`]).
@@ -36,13 +39,17 @@ use vti_vtn::verify::{ASSERTION_METHOD, AUTHENTICATION, verify_document};
 use crate::routes::AppState;
 
 /// The `vtn/*` task families a wallet-approved browser key signs for as its approver: the
-/// reads of the published set.
+/// reads of the published set, and an administrator's invitations (the landing page's
+/// Invite tab). Each task still checks the approver's standing.
 pub const SIGNING_SCOPE: &[&str] = &[
     "vtn/directory",
     "vtn/graph",
     "vtn/entries",
     "vtn/roles",
     "vtn/rooms/list",
+    "vtn/listings/create",
+    "vtn/listings/list",
+    "vtn/listings/show",
 ];
 
 /// A network has one kind of sign-in.
