@@ -365,17 +365,14 @@ async fn the_profile_and_landing_page_advertise_the_registry() {
     let (status, csp, _) = get(&state, "/").await;
     assert_eq!(status, StatusCode::OK);
     let csp = csp.unwrap();
-    assert!(
-        csp.contains("connect-src 'self' https://registry.example;"),
-        "{csp}"
-    );
+    assert!(csp.contains("connect-src 'self' https:;"), "{csp}");
 
-    // No registry: no profile member, and the page reaches only this network.
+    // No registry: no profile member; the page still resolves DIDs over HTTPS.
     let (_dir, plain) = network(None).await;
     let (_, _, profile) = get(&plain, "/.well-known/vtn").await;
     assert!(profile.get("trustRegistry").is_none(), "{profile:#}");
     let (_, csp, _) = get(&plain, "/").await;
-    assert!(csp.unwrap().contains("connect-src 'self';"));
+    assert!(csp.unwrap().contains("connect-src 'self' https:;"));
 }
 
 #[test]

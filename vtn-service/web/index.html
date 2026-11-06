@@ -554,6 +554,80 @@
     return Object.assign({}, doc, { proof: Object.assign(proof, { proofValue: "z" + b58(sig) }) });
   }
 
+  // ---- checking signatures here, rather than taking anyone's word for them.
+  function unb58(s) {
+    const bytes = [0];
+    for (const ch of s) {
+      let c = B58.indexOf(ch);
+      if (c < 0) throw new Error("not base58");
+      for (let j = 0; j < bytes.length; j++) { c += bytes[j] * 58; bytes[j] = c & 255; c >>= 8; }
+      while (c > 0) { bytes.push(c & 255); c >>= 8; }
+    }
+    for (const ch of s) { if (ch === "1") bytes.push(0); else break; }
+    return new Uint8Array(bytes.reverse());
+  }
+
+  // A DID's current document. did:webvh: the last entry of its DID log, fetched from the
+  // host the DID names (this page reads the log's latest state; `nnm verify` also checks
+  // the log's hash chain). did:key: the key itself.
+  const DID_DOCS = new Map();
+  function resolveDid(did) {
+    if (!DID_DOCS.has(did)) DID_DOCS.set(did, (async () => {
+      if (did.startsWith("did:key:")) {
+        const mk = did.slice(8);
+        const id = `${did}#${mk}`;
+        return { id: did, verificationMethod: [{ id, publicKeyMultibase: mk }], authentication: [id], assertionMethod: [id] };
+      }
+      const parts = did.split(":");
+      if (parts[0] !== "did" || parts[1] !== "webvh" || parts.length < 4) throw new Error("cannot resolve " + parts.slice(0, 2).join(":") + " here");
+      const host = decodeURIComponent(parts[3]);
+      const path = parts.slice(4).map(decodeURIComponent);
+      const url = `https://${host}/${path.length ? path.join("/") : ".well-known"}/did.jsonl`;
+      const res = await fetch(url, { headers: { Accept: "application/jsonl, application/json" } });
+      if (!res.ok) throw new Error(`its DID log is not available (${res.status})`);
+      const lines = (await res.text()).trim().split("\n");
+      const state = JSON.parse(lines[lines.length - 1]).state;
+      if (!state || state.id !== did) throw new Error("its DID log names another DID");
+      return state;
+    })());
+    return DID_DOCS.get(did);
+  }
+
+  // Verify `doc`'s eddsa-jcs-2022 proof by `did`'s key for `purpose`. A proof set (e.g.
+  // Ed25519 plus ML-DSA) passes on its Ed25519 proof. Returns
+  // { ok: true } | { ok: false, why } (a signature that does not verify) | { ok: null, why } (could not check here).
+  async function verifyProof(doc, did, purpose) {
+    const proofs = [].concat((doc && doc.proof) || []);
+    const mine = proofs.filter((p) => p && typeof p.verificationMethod === "string" && p.verificationMethod.split("#")[0] === did);
+    if (!mine.length) return { ok: false, why: "no proof by " + did };
+    const ed = mine.find((p) => p.cryptosuite === "eddsa-jcs-2022");
+    if (!ed) return { ok: null, why: "no eddsa-jcs-2022 proof to check here" };
+    if (ed.proofPurpose !== purpose) return { ok: false, why: `its proof is for ${ed.proofPurpose}, not ${purpose}` };
+    let state;
+    try { state = await resolveDid(did); } catch (e) { return { ok: null, why: "could not resolve the signer's DID here: " + (e.message || e) }; }
+    const vmId = ed.verificationMethod;
+    const rel = (x) => (typeof x === "string" ? x : x && x.id) || "";
+    const abs = (x) => (rel(x).startsWith("#") ? did + rel(x) : rel(x));
+    if (!(state[purpose] || []).some((x) => abs(x) === vmId)) return { ok: false, why: `the key is not one of the signer's ${purpose} keys` };
+    const vm = (state.verificationMethod || []).find((v) => abs(v) === vmId) || (state[purpose] || []).find((v) => typeof v === "object" && abs(v) === vmId);
+    const mb = vm && vm.publicKeyMultibase;
+    if (typeof mb !== "string" || !mb.startsWith("z")) return { ok: null, why: "the signer's key is not a multibase key" };
+    const raw = unb58(mb.slice(1));
+    if (raw[0] !== 0xed || raw[1] !== 0x01 || raw.length !== 34) return { ok: null, why: "the signer's key is not Ed25519" };
+    try {
+      const key = await crypto.subtle.importKey("raw", raw.slice(2), { name: "Ed25519" }, false, ["verify"]);
+      const { proofValue, ...config } = ed;
+      const { proof, ...body } = doc;
+      const data = new Uint8Array(64);
+      data.set(await sha256(jcs(config)), 0);
+      data.set(await sha256(jcs(body)), 32);
+      const good = await crypto.subtle.verify({ name: "Ed25519" }, key, unb58(String(proofValue).slice(1)), data);
+      return good ? { ok: true } : { ok: false, why: "the signature does not verify" };
+    } catch (e) {
+      return { ok: null, why: "this browser cannot check Ed25519 signatures" };
+    }
+  }
+
   // Keep an approved key across reloads, in this browser only (IndexedDB holds the
   // CryptoKey itself; its private half stays unreadable).
   function db() {
@@ -1197,27 +1271,37 @@
 
   // How the last registry answer was had: asked directly from this browser, or relayed by
   // this network (`vtn/registry/check`) for a registry that serves no HTTPS. A relayed
-  // answer carries the registry's own signed document; `signed` says whether its proof is
-  // the registry's DID (checked by DID, not by signature: `nnm verify` checks that).
-  let REG_VIA = { via: "direct", signed: false, answer: null };
+  // answer is the registry's own signed document, and its signature is checked here
+  // (`sig`, from verifyProof): verified, it is as good as asking the registry directly.
+  // `why` says why the registry could not be asked.
+  let REG_VIA = { via: "direct", sig: null, answer: null, why: null };
 
   // The registry's answer through this network: member | listed | notFound | unreachable.
   async function relayRegistry(did) {
     let r;
     try { r = await task("vtn/registry/check", { did }); } catch { return "unreachable"; }
-    if (!r.ok) return "unreachable";
+    REG_VIA = { via: "relayed", sig: null, answer: null, why: null };
+    if (!r.ok) { REG_VIA.why = "the network did not relay the question (" + r.code + ")"; return "unreachable"; }
     const p = r.payload || {};
     const answer = p.answer || null;
-    const vm = answer ? signedBy(answer.proof, TR.did) : null;
-    REG_VIA = { via: "relayed", signed: !!(vm && answer.issuer === TR.did && vm === TR.did), answer };
-    if (!p.reachable) return "unreachable";
+    REG_VIA.answer = answer;
+    if (!p.reachable) {
+      const refused = answer && answer.payload && answer.payload.code;
+      REG_VIA.why = refused === "unsupportedType" || refused === "permissionDenied"
+        ? `the registry refused this network's query (${refused}): it answers record queries only from DIDs in its ADMIN_DIDS, so add this network's DID there`
+        : "the network could not reach it" + (p.reason ? ": " + p.reason : "");
+      return "unreachable";
+    }
+    if (!answer || answer.issuer !== TR.did) { REG_VIA.why = "the relayed answer is not from the registry this network names"; return "unreachable"; }
+    REG_VIA.sig = await verifyProof(answer, TR.did, "authentication");
+    if (REG_VIA.sig.ok === false) { REG_VIA.why = "the registry's signature on the relayed answer does not check out: " + REG_VIA.sig.why; return "unreachable"; }
     if (p.member) return "member";
     return p.listed ? "listed" : "notFound";
   }
 
   // What the registry says: member | listed | notFound | unreachable | notPublished.
   async function askRegistry(did) {
-    REG_VIA = { via: "direct", signed: false, answer: null };
+    REG_VIA = { via: "direct", sig: null, answer: null, why: null };
     if (!TR) return "notPublished";
     if (!TR.queryUrl || !safeHref(TR.queryUrl)) return relayRegistry(did);
     const member = await trqp(did, trAction("member"));
@@ -1233,9 +1317,10 @@
     let r;
     try { r = await task("vtn/entries/show", { did }); } catch { return { kind: "error", why: "no answer" }; }
     const signer = r.body ? signedBy(r.body.proof, NETWORK) : null;
-    if (r.ok) return { kind: "entry", entry: r.payload.entry, signer, body: r.body };
+    const sig = r.body && NETWORK ? await verifyProof(r.body, NETWORK, "authentication") : { ok: false, why: "unsigned" };
+    if (r.ok) return { kind: "entry", entry: r.payload.entry, signer, sig, body: r.body };
     const reason = r.error && r.error.details && r.error.details.reason;
-    if (reason === "not_found" || /notFound|notListed/.test(r.code)) return { kind: "notFound", signer, body: r.body };
+    if (reason === "not_found" || /notFound|notListed/.test(r.code)) return { kind: "notFound", signer, sig, body: r.body };
     if (/permissionDenied|forbidden/.test(r.code)) return { kind: "restricted", signer, body: r.body };
     return { kind: "error", why: (r.error && r.error.message) || r.code, body: r.body };
   }
@@ -1280,7 +1365,8 @@
       member: "holds a member record for it",
       listed: "holds a listed (not acknowledged) record for it",
       notFound: "holds no record for it",
-      unreachable: relayed ? "could not be asked (the network could not reach it)"
+      unreachable: REG_VIA.why ? "could not be asked: " + REG_VIA.why
+        : relayed ? "could not be asked (the network could not reach it)"
         : "could not be asked from this browser (unreachable, or it does not allow this site)",
       notPublished: "this network publishes no trust registry",
     }[reg];
@@ -1289,9 +1375,8 @@
   // How the registry's answer was had, for the reader.
   function viaText() {
     if (REG_VIA.via !== "relayed") return "asked directly from this browser";
-    return REG_VIA.signed
-      ? "relayed by this network; the answer is signed by the registry's DID"
-      : "relayed by this network; take it as the network's word";
+    if (REG_VIA.sig && REG_VIA.sig.ok) return "the registry's signed answer, relayed by this network; signature verified in this browser";
+    return "relayed by this network; the registry's signature could not be checked here (" + ((REG_VIA.sig && REG_VIA.sig.why) || "no signature") + "), so take it as the network's word";
   }
 
   function netText(n) {
@@ -1387,12 +1472,12 @@
     const now = Date.now();
     const from = Date.parse(c.validFrom), until = c.validUntil ? Date.parse(c.validUntil) : null;
     const window = (isNaN(from) || from <= now) && (until === null || until > now);
-    const proofBy = signedBy(c.proof, issuer);
-    const ok = c.issuer === issuer && subjectOf(c) === subject && window && proofBy === issuer;
-    rows.push([ok ? "pass" : "fail", label,
+    const sig = await verifyProof(c, issuer, "assertionMethod");
+    const fields = c.issuer === issuer && subjectOf(c) === subject && window;
+    rows.push([!fields || sig.ok === false ? "fail" : sig.ok ? "pass" : "unknown", label,
       `issued by ${c.issuer === issuer ? "the expected party" : c.issuer}, about ${subjectOf(c) === subject ? "the expected party" : subjectOf(c)}; ` +
       `valid from ${c.validFrom || "?"}${c.validUntil ? " until " + c.validUntil : ""}${window ? "" : " (outside its validity window)"}; ` +
-      (proofBy === issuer ? "proof by the issuer's key (signature verified by nnm verify)" : "no proof by the issuer")]);
+      (sig.ok ? "the issuer's signature verified in this browser" : sig.ok === false ? sig.why : "signature not checked here: " + sig.why + " (nnm verify checks it)")]);
     const st = await statusFrom(c);
     rows.push([st === "valid" ? "pass" : st === "unknown" ? "unknown" : "fail", label + " status",
       { valid: "not revoked or suspended", revoked: "revoked", suspended: "suspended", unknown: "could not be checked here", unchecked: "not checked by the network" }[st] || st]);
@@ -1406,8 +1491,11 @@
     const rows = [];
     // 1. The network's answer, and whose key signed it.
     if (net.kind === "entry" || net.kind === "notFound") {
-      rows.push([net.signer === NETWORK ? "pass" : "fail", "The network's answer",
-        net.signer === NETWORK ? "signed by the network's DID (" + NETWORK + "): " + netText(net) : "not signed by the network's DID"]);
+      const s = net.sig || {};
+      rows.push([s.ok ? "pass" : s.ok === null ? "unknown" : "fail", "The network's answer",
+        s.ok ? "signed by the network's DID (" + NETWORK + "), signature verified in this browser: " + netText(net)
+          : s.ok === null ? "signed by " + (net.signer || "?") + "; " + s.why + ": " + netText(net)
+          : "not signed by the network's DID (" + (s.why || "no proof") + ")"]);
     } else {
       rows.push(["unknown", "The network's answer", netText(net)]);
     }
@@ -1429,7 +1517,7 @@
     // 2. The registry.
     const agree = agrees(net, reg);
     rows.push([reg === "notPublished" || reg === "unreachable" ? "unknown" : agree === false ? "fail" : "pass",
-      "Trust registry", regText(reg) + (reg === "notPublished" ? "" : " (" + (TR.queryUrl && REG_VIA.via === "direct" ? TR.queryUrl + ", " : "") + viaText() + ")")]);
+      "Trust registry", regText(reg) + (reg === "notPublished" || reg === "unreachable" ? "" : " (" + (TR.queryUrl && REG_VIA.via === "direct" ? TR.queryUrl + ", " : "") + viaText() + ")")]);
 
     const failed = rows.some((x) => x[0] === "fail");
     const revoked = rows.some((x) => x[0] === "fail" && /status$/.test(x[1]) && /revoked/.test(x[2]));
@@ -1474,7 +1562,7 @@
     if (TR) {
       facts.push(["Publishes", TR.publishes === "members-and-listed" ? "members, and listed parties (as “listed”)" : "acknowledged members only"]);
       if (TR.queryUrl) facts.push(["Query", el("span", { class: "did" }, TR.queryUrl)]);
-      else facts.push(["Query", "DIDComm or TSP only: this page asks the network to relay (vtn/registry/check), and shows the registry's signed answer"]);
+      else facts.push(["Query", "DIDComm or TSP only: this page asks the network to relay (vtn/registry/check) and verifies the registry's signature on the answer itself"]);
       facts.push(["Records", el("span", { class: "did" }, `(party, ${TR.authority || NETWORK}, ${trAction("member")}, ${TR.resource || "vtn"})`)]);
     }
     const evidence = el("span", {});

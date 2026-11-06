@@ -147,7 +147,7 @@ impl Report {
             },
             match (self.registry_via, self.registry_url.as_deref()) {
                 (Some("relayed"), _) =>
-                    " (relayed by the network: weaker than asking directly)".to_string(),
+                    " (relayed by the network; the registry's signature verified)".to_string(),
                 (_, Some(u)) => format!(" ({u})"),
                 _ => String::new(),
             }
@@ -697,7 +697,7 @@ impl Verifier {
                     && r["authorized"] == true
             })
         };
-        let note = "relayed by the network; signed by the registry".to_string();
+        let note = "relayed by the network; the registry's signature verified".to_string();
         if holds(ACTION_MEMBER) {
             (RegistryAnswer::Member, note)
         } else if holds(ACTION_LISTED) {

@@ -53,8 +53,12 @@ The network advertises the registry in its profile, `GET /.well-known/vtn`:
 }
 ```
 
-and lets its landing page query `query_url`'s origin from the browser (the page's
-`connect-src`), so a visitor checks a record with the registry itself.
+and its landing page asks the registry for a visitor: directly at `query_url` from the
+browser when there is one, otherwise relayed by this network (`vtn/registry/check`). Either
+way the page checks the registry's answer itself: a relayed answer is the registry's own
+signed document, and the page verifies its `eddsa-jcs-2022` proof against the key in the
+registry's DID log, fetched from the registry's DID host. A relayed answer whose signature
+verifies is as good as a direct one; one that does not verify counts for nothing.
 
 ## The registry's side
 
