@@ -143,30 +143,24 @@ async fn ready(State(s): State<AppState>) -> Response {
     }
 }
 
-async fn landing(State(s): State<AppState>) -> Response {
+async fn landing() -> Response {
     let mut res = Html(LANDING_PAGE).into_response();
-    if let Ok(policy) = HeaderValue::from_str(&landing_policy(s.registry.as_ref())) {
+    if let Ok(policy) = HeaderValue::from_str(&landing_policy()) {
         res.headers_mut()
             .insert(header::CONTENT_SECURITY_POLICY, policy);
     }
     res
 }
 
-/// The landing page's CSP. With a trust registry whose query surface is advertised, the
-/// page may also reach that origin, so a visitor checks a record with the registry itself
-/// rather than taking this network's word for it (the registry must allow this network's
-/// origin in its `CORS_ALLOWED_ORIGINS`).
-pub fn landing_policy(registry: Option<&crate::config::RegistryConfig>) -> String {
-    let registry_origin = registry
-        .and_then(|r| r.query_url.as_deref())
-        .and_then(crate::registry::origin_of)
-        .map(|o| format!(" {o}"))
-        .unwrap_or_default();
-    format!(
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-         connect-src 'self'{registry_origin}; img-src 'self' data:; base-uri 'none'; \
-         form-action 'none'; frame-ancestors 'none'"
-    )
+/// The landing page's CSP. The page checks signatures itself, so it fetches DID logs
+/// (`did:webvh` resolution) from whatever HTTPS host a signer's DID names, and asks a
+/// trust registry's advertised query surface directly (which must allow this network's
+/// origin in its `CORS_ALLOWED_ORIGINS`): `connect-src` is `'self'` plus any HTTPS origin.
+pub fn landing_policy() -> String {
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+     connect-src 'self' https:; img-src 'self' data:; base-uri 'none'; \
+     form-action 'none'; frame-ancestors 'none'"
+        .to_string()
 }
 
 async fn profile(State(s): State<AppState>) -> Json<Value> {
