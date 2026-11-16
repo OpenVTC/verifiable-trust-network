@@ -2119,7 +2119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.9",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -6574,9 +6574,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-rs"
-version = "0.37.5"
+version = "0.37.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4b01307cb18fb970e50605c1a9e9775676b7243b19414d581be5307bc884f3a"
+checksum = "702ad3e50fb73403bffc7291d7b2439cfe34d6debf5a55aecd0912995c588f10"
 dependencies = [
  "async-trait",
  "chrono",
