@@ -41,7 +41,7 @@ dtg-credentials = "0.13"
 affinidi-secrets-resolver = "0.5.15"
 affinidi-data-integrity = "0.8"
 vti-common = { version = "0.61", features = ["host-session"] }
-vti-secrets = "0.34"
+vti-secrets = "0.35"
 vta-sdk = { version = "0.85", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
 affinidi-did-resolver-cache-sdk = { version = "0.8.43", features = ["network"] }
 
