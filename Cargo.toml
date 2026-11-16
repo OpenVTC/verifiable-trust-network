@@ -26,7 +26,7 @@ type_complexity = "allow"
 # rooms, and (feature `client`) the `vtn/*` Trust Task client.
 vti-vtn = { version = "0.8", features = ["client", "resolve"] }
 # The receive side of the `vtn/*` Trust Tasks (`POST /v1/trust-tasks`), shared with the VTC.
-vti-trust-task-server = "0.7"
+vti-trust-task-server = "0.8"
 # The generated `vtn/*` 0.1 payload and response types, and their schema index.
 vti-specs-vtn = "0.2.2"
 # `vtc/networks/deliver`: how this network delivers a broadcast to a member community.
