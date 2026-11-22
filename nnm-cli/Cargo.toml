@@ -38,6 +38,7 @@ trql-client = { workspace = true }
 async-trait = { workspace = true }
 tempfile = { workspace = true }
 vtn-service = { path = "../vtn-service" }
+vta-sdk = { workspace = true }
 axum = { workspace = true }
 rcgen = "0.14"
 rustls = "0.23"

@@ -37,6 +37,9 @@ async fn network(visibility: Visibility) -> Net {
 /// A network publishing to `relayed`, a registry it reaches over its session only (no HTTPS
 /// query URL), so a verifier's registry check is relayed through `vtn/registry/check`.
 async fn network_with(visibility: Visibility, relayed: Option<Arc<SessionRegistry>>) -> Net {
+    // The network and its status lists are served on 127.0.0.1. vta-sdk's
+    // status-list fetch refuses loopback and private hosts unless the process opts in.
+    vta_sdk::http::set_allow_private_endpoints(true);
     let dir = tempfile::tempdir().unwrap();
     let operator = Identity::generate();
     let (listener, url) = tls::bind().await;
