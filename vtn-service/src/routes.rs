@@ -37,6 +37,12 @@ use vti_trust_task_server::ArrivalCtx;
 use vti_trust_task_server::http::TrustTaskService;
 
 const LANDING_PAGE: &str = include_str!("../web/index.html");
+/// did:webs resolution for the landing page's verifier: @openvtc/vti-didcomm-js's
+/// `did-webs` bundled by `scripts/vendor-did-webs.sh` (key event log verified in the
+/// browser). Served from this network so the page loads no third-party script.
+const DID_WEBS_MODULE: &str = include_str!("../web/did-webs.js");
+/// Where the landing page imports [`DID_WEBS_MODULE`] from.
+pub const DID_WEBS_MODULE_PATH: &str = "/web/did-webs.js";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -57,6 +63,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     let artifacts = Router::new()
         .route("/", get(landing))
+        .route(DID_WEBS_MODULE_PATH, get(did_webs_module))
         .route("/health", get(health))
         .route("/health/ready", get(ready))
         .route("/.well-known/vtn", get(profile))
@@ -152,12 +159,28 @@ async fn landing() -> Response {
     res
 }
 
+/// The did:webs module the landing page imports. It is part of this build, so it may be
+/// cached for a day; a new build serves the new module.
+async fn did_webs_module() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        DID_WEBS_MODULE,
+    )
+        .into_response()
+}
+
 /// The landing page's CSP. The page checks signatures itself, so it fetches DID logs
-/// (`did:webvh` resolution) from whatever HTTPS host a signer's DID names, and asks a
-/// trust registry's advertised query surface directly (which must allow this network's
-/// origin in its `CORS_ALLOWED_ORIGINS`): `connect-src` is `'self'` plus any HTTPS origin.
+/// (`did:webvh` resolution) and key event logs (`did:webs`) from whatever HTTPS host a
+/// signer's DID names, and asks a trust registry's advertised query surface directly
+/// (which must allow this network's origin in its `CORS_ALLOWED_ORIGINS`): `connect-src`
+/// is `'self'` plus any HTTPS origin. `script-src 'self'` admits the did:webs module this
+/// network serves, and nothing from elsewhere.
 pub fn landing_policy() -> String {
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; \
      connect-src 'self' https:; img-src 'self' data:; base-uri 'none'; \
      form-action 'none'; frame-ancestors 'none'"
         .to_string()

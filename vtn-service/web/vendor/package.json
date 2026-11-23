@@ -1,0 +1,11 @@
+{
+  "name": "vtn-landing-vendor",
+  "private": true,
+  "description": "Pinned inputs for vtn-service/web/did-webs.js. Rebuild with scripts/vendor-did-webs.sh.",
+  "dependencies": {
+    "@openvtc/vti-didcomm-js": "0.16.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
