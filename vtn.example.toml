@@ -10,7 +10,8 @@ data_dir = "data/vtn"
 # revocation elsewhere can take this long to be seen here.
 status_cache_seconds = 300
 # Certificate authorities to trust beside the system's when calling other parties over
-# HTTPS (a private CA). Endpoints are always https://.
+# HTTPS (a private CA). Endpoints are always https://. Status-list fetches trust them only
+# when private endpoints are allowed: run the service with VTA_ALLOW_PRIVATE_ENDPOINTS=1.
 # extra_root_certificates = ["/etc/vtn/private-ca.pem"]
 # Administrators: the DIDs their NNMs sign requests as (`nnm keys generate`).
 admins = ["did:key:z6Mk...replace-me"]

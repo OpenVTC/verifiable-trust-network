@@ -101,6 +101,10 @@ pub async fn build_state_with(
                 .with_context(|| format!("{} is not a PEM certificate bundle", path.display()))?,
         );
     }
+    trust_extra_roots_for_foreign_fetches(
+        &extra_roots,
+        vta_sdk::http::EndpointPolicy::process_default(),
+    );
     let accepted = crate::tasks::accepted::StoreAcceptedIds::new(store.accepted_ids().clone());
     let network = Network::new(
         profile,
@@ -129,6 +133,38 @@ pub async fn build_state_with(
     })
 }
 
+/// Trust `roots` (`extra_root_certificates`) in vta-sdk's hardened foreign-fetch client too,
+/// the client a status list is fetched with because its URL comes from a credential.
+///
+/// That client only trusts extra roots under the private-endpoint policy
+/// ([`vta_sdk::http::ALLOW_PRIVATE_ENDPOINTS_ENV`]), the opt-in a deployment behind a private
+/// CA already needs to reach its own hosts, so they are applied only when `policy` allows
+/// private endpoints. Process-wide, and replaces any roots set before; called once at
+/// startup. Returns how many roots were applied.
+fn trust_extra_roots_for_foreign_fetches(
+    roots: &[reqwest::Certificate],
+    policy: vta_sdk::http::EndpointPolicy,
+) -> usize {
+    if roots.is_empty() {
+        return 0;
+    }
+    if !policy.allow_private {
+        tracing::info!(
+            count = roots.len(),
+            "extra_root_certificates not applied to status-list fetches: private endpoints \
+             are not allowed (set {}=1)",
+            vta_sdk::http::ALLOW_PRIVATE_ENDPOINTS_ENV
+        );
+        return 0;
+    }
+    vta_sdk::http::set_private_extra_root_certificates(roots.to_vec());
+    tracing::info!(
+        count = roots.len(),
+        "trusting extra root certificates for status-list fetches"
+    );
+    roots.len()
+}
+
 fn random_bytes() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("OS random number generator unavailable");
@@ -147,4 +183,35 @@ pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use vta_sdk::http::EndpointPolicy;
+
+    use super::trust_extra_roots_for_foreign_fetches;
+
+    fn root() -> reqwest::Certificate {
+        let ca = rcgen::generate_simple_self_signed(vec!["private-ca.test".to_string()]).unwrap();
+        reqwest::Certificate::from_pem(ca.cert.pem().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn extra_roots_reach_foreign_fetches_only_when_private_endpoints_are_allowed() {
+        let roots = vec![root(), root()];
+        assert_eq!(
+            trust_extra_roots_for_foreign_fetches(&roots, EndpointPolicy::public_only()),
+            0,
+            "a public-only network keeps the system roots for status-list fetches"
+        );
+        assert_eq!(
+            trust_extra_roots_for_foreign_fetches(&roots, EndpointPolicy::private_allowed()),
+            2
+        );
+        assert_eq!(
+            trust_extra_roots_for_foreign_fetches(&[], EndpointPolicy::private_allowed()),
+            0,
+            "no configured roots leaves the client as it is"
+        );
+    }
 }
