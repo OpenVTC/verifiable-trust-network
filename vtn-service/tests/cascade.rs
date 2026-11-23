@@ -133,6 +133,9 @@ async fn live_with(
     visibility: Visibility,
     rooms: Vec<vtn_service::rooms::RoomDef>,
 ) -> Live {
+    // A network checks status lists (its peers', a community's) served over TLS on
+    // 127.0.0.1 under the test CA.
+    tls::trust_for_foreign_fetches();
     let (listener, url) = tls::bind().await;
     let dir = tempfile::tempdir().unwrap();
     let ca = dir.path().join("test-ca.pem");

@@ -37,6 +37,8 @@ async fn network(visibility: Visibility) -> Net {
 /// A network publishing to `relayed`, a registry it reaches over its session only (no HTTPS
 /// query URL), so a verifier's registry check is relayed through `vtn/registry/check`.
 async fn network_with(visibility: Visibility, relayed: Option<Arc<SessionRegistry>>) -> Net {
+    // The network serves its status lists over TLS on 127.0.0.1, under the test CA.
+    tls::trust_for_foreign_fetches();
     let dir = tempfile::tempdir().unwrap();
     let operator = Identity::generate();
     let (listener, url) = tls::bind().await;

@@ -154,6 +154,14 @@ ignore = [
   provider stack stops reaching libcrux.
   """ },
 
+  { id = "RUSTSEC-2026-0543", reason = """
+  chrono is unmaintained (chronotope/chrono#1768): a status advisory with no
+  vulnerability reported and no fixed release. It is not removable here alone:
+  the workspace uses it directly, and vti-common, vti-vtn, vta-sdk and the
+  Affinidi TDK all expose it in their APIs. Ignored across the VTI repos on
+  2026-11-17 pending a jiff/time migration. Drop with that migration.
+  """ },
+
 ]
 
 # License policy. Allow-list is derived from the actual licenses present
