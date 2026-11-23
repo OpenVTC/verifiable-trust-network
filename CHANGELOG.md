@@ -19,6 +19,7 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 - **service**: repeated transitions are answered with the entry as it stands, and `listings/update` changes only the fields named (A22).
 - **nnm**: every command is a signed `vtn/*` task. `nnm token` and `nnm login` are gone with the sessions; `memberships join` and `repudiate` take `--parent <did>`.
 - **landing page**: reads the directory, counts and graph with unsigned `vtn/*` tasks.
+- **service**: `extra_root_certificates` also reach status-list fetches. These go through vta-sdk's hardened client, which now trusts the configured roots when private endpoints are allowed (`VTA_ALLOW_PRIVATE_ENDPOINTS=1`). A network behind a private CA can check the status lists of its own communities and member networks.
 
 ### Breaking
 

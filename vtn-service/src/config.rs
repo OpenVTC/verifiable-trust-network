@@ -35,6 +35,10 @@ pub struct Config {
     /// PEM files of certificate authorities to trust, beside the system's, when this
     /// network calls another party over HTTPS: a private CA in a closed deployment.
     /// Endpoints are always `https://` (`vtn/groups/register`).
+    ///
+    /// Status lists are fetched with vta-sdk's hardened client, because their URLs come
+    /// from credentials. That client trusts these roots only when private endpoints are
+    /// allowed (`VTA_ALLOW_PRIVATE_ENDPOINTS=1`), which a closed deployment already needs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_root_certificates: Vec<PathBuf>,
     pub network: NetworkConfig,
