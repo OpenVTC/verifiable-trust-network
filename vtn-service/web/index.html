@@ -569,14 +569,24 @@
 
   // A DID's current document. did:webvh: the last entry of its DID log, fetched from the
   // host the DID names (this page reads the log's latest state; `nnm verify` also checks
-  // the log's hash chain). did:key: the key itself.
+  // the log's hash chain). did:webs: resolved in full in this browser by
+  // @openvtc/vti-didcomm-js (`/web/did-webs.js`, served by this network and loaded only
+  // when needed): its key event log is fetched from the host the DID names and verified,
+  // key-role designations included. did:key: the key itself.
   const DID_DOCS = new Map();
+  let WEBS = null;
   function resolveDid(did) {
     if (!DID_DOCS.has(did)) DID_DOCS.set(did, (async () => {
       if (did.startsWith("did:key:")) {
         const mk = did.slice(8);
         const id = `${did}#${mk}`;
         return { id: did, verificationMethod: [{ id, publicKeyMultibase: mk }], authentication: [id], assertionMethod: [id] };
+      }
+      if (did.startsWith("did:webs:")) {
+        WEBS = WEBS || import("/web/did-webs.js");
+        const { didDocument } = await (await WEBS).resolve(did);
+        if (!didDocument || didDocument.id !== did) throw new Error("its did:webs document names another DID");
+        return didDocument;
       }
       const parts = did.split(":");
       if (parts[0] !== "did" || parts[1] !== "webvh" || parts.length < 4) throw new Error("cannot resolve " + parts.slice(0, 2).join(":") + " here");
@@ -610,12 +620,24 @@
     const abs = (x) => (rel(x).startsWith("#") ? did + rel(x) : rel(x));
     if (!(state[purpose] || []).some((x) => abs(x) === vmId)) return { ok: false, why: `the key is not one of the signer's ${purpose} keys` };
     const vm = (state.verificationMethod || []).find((v) => abs(v) === vmId) || (state[purpose] || []).find((v) => typeof v === "object" && abs(v) === vmId);
+    // Ed25519 as a multikey (did:key, did:webvh) or as an OKP JWK (did:webs).
+    let pub;
     const mb = vm && vm.publicKeyMultibase;
-    if (typeof mb !== "string" || !mb.startsWith("z")) return { ok: null, why: "the signer's key is not a multibase key" };
-    const raw = unb58(mb.slice(1));
-    if (raw[0] !== 0xed || raw[1] !== 0x01 || raw.length !== 34) return { ok: null, why: "the signer's key is not Ed25519" };
+    const jwk = vm && vm.publicKeyJwk;
+    if (typeof mb === "string" && mb.startsWith("z")) {
+      const raw = unb58(mb.slice(1));
+      if (raw[0] !== 0xed || raw[1] !== 0x01 || raw.length !== 34) return { ok: null, why: "the signer's key is not Ed25519" };
+      pub = raw.slice(2);
+    } else if (jwk && typeof jwk === "object") {
+      if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string") return { ok: null, why: "the signer's key is not Ed25519" };
+      const b64 = jwk.x.replace(/-/g, "+").replace(/_/g, "/");
+      pub = Uint8Array.from(atob(b64 + "=".repeat((4 - b64.length % 4) % 4)), (c) => c.charCodeAt(0));
+      if (pub.length !== 32) return { ok: null, why: "the signer's key is not Ed25519" };
+    } else {
+      return { ok: null, why: "the signer's key is neither a multibase key nor a JWK" };
+    }
     try {
-      const key = await crypto.subtle.importKey("raw", raw.slice(2), { name: "Ed25519" }, false, ["verify"]);
+      const key = await crypto.subtle.importKey("raw", pub, { name: "Ed25519" }, false, ["verify"]);
       const { proofValue, ...config } = ed;
       const { proof, ...body } = doc;
       const data = new Uint8Array(64);

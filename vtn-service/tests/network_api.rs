@@ -939,6 +939,39 @@ async fn landing_page_is_served_with_a_strict_policy() {
     )
     .unwrap();
     assert!(html.contains("/v1/trust-tasks") && html.contains("vtn/directory/search"));
+    assert!(csp.contains("script-src 'self'"));
+    assert!(html.contains(vtn_service::routes::DID_WEBS_MODULE_PATH));
+}
+
+#[tokio::test]
+async fn the_did_webs_module_is_served_for_the_landing_page() {
+    let whn = network("WHN").await;
+    let res = whn
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(vtn_service::routes::DID_WEBS_MODULE_PATH)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    let js = String::from_utf8(
+        to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    // The bundle's generated header, and the export the page calls.
+    assert!(js.starts_with("// did:webs resolution for the VTN landing page"));
+    assert!(js.contains("resolve}"));
 }
 
 #[tokio::test]

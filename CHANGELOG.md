@@ -9,6 +9,7 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 
 ### Features
 
+- **landing page**: "Verify a member" checks did:webs signatures in the browser. A did:webs community's acknowledgement used to show "signature not checked here". The page now loads `/web/did-webs.js`, the did:webs resolver of `@openvtc/vti-didcomm-js` bundled into this build by `scripts/vendor-did-webs.sh` and pinned in `vtn-service/web/vendor/package.json`. It verifies the signer's key event log and key-role designations, then the signature against the resulting key. The page's CSP gains `script-src 'self'` for that module; nothing is loaded from a third party.
 - **service**: browser sign-in (A13). The network serves `auth/oob/*` through `vti-oob-server`, shared with the VTC: a wallet approves the landing page's own key, which then signs directory, graph, entry, role and room reads as the approver, for at most `[auth] browser_key_hours` (8 by default, 24 at most). No session, no cookie. `/.well-known/vtn` publishes `signIn` (link host, flow, scope).
 - **templates**: `vtn-host` advertises `TrustTaskHTTPS` and `SignInPortal`, which a wallet needs to find the network.
 - **landing page**: "Sign in with a wallet" on a restricted directory: the trigger link, the number to type into the wallet, and the approved key kept in this browser until it ends.
