@@ -53,6 +53,10 @@ conventional-commit PR title and a real commit body (see CONTRIBUTING.md).
 - **service**: `status_cache_seconds` sets how long fetched status lists are trusted (A18).
 - **nnm**: the Network Network Manager CLI: admin keys, networks, sign-in, curation commands, entry profiles, graph, index and audit. Also `roles`, `groups`, `broadcast`, `broadcasts`, and `memberships list|join|serve|leave|repudiate`.
 
+### Fixed
+
+- **service**: the network resolves `did:webs`, so a did:webs community (a KERI-based VTC) can be checked against its listing and join. A network built against vti-vtn 0.8 refused every request from one with `no resolver registered for DID method 'webs'`. The resolver's `did-webs` feature is now stated in the workspace manifest rather than only inherited from vti-vtn.
+
 ### Documentation
 
 - Design (`docs/vtn-design.md`), working assumptions on open WG questions (`docs/assumptions.md`), and the DTG WG proposal for VMC support of VTN membership (discussion #82, PR #83).
