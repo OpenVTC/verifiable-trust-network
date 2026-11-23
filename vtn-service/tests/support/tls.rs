@@ -15,6 +15,21 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
+/// Let vta-sdk's hardened foreign-fetch client reach these servers: on loopback, and under
+/// the test authority. A status list is fetched with that client, never [`client`], because
+/// its URL comes from the credential. Process-wide, as a deployment behind a private CA sets
+/// it. Call before building a network, whose clients read the private-endpoint opt-in when
+/// they are made.
+pub fn trust_for_foreign_fetches() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    DONE.get_or_init(|| {
+        vta_sdk::http::set_allow_private_endpoints(true);
+        vta_sdk::http::set_private_extra_root_certificates(vec![
+            reqwest::Certificate::from_pem(ca().ca_pem.as_bytes()).unwrap(),
+        ]);
+    });
+}
+
 pub struct TestCa {
     /// The authority's certificate, PEM.
     pub ca_pem: String,

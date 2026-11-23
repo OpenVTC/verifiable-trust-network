@@ -37,22 +37,14 @@ async fn network(visibility: Visibility) -> Net {
 /// A network publishing to `relayed`, a registry it reaches over its session only (no HTTPS
 /// query URL), so a verifier's registry check is relayed through `vtn/registry/check`.
 async fn network_with(visibility: Visibility, relayed: Option<Arc<SessionRegistry>>) -> Net {
-    // Status lists are fetched with vta-sdk's hardened client, not the test's
-    // `tls::client()`: a status-list URL comes from the credential, so it is treated as
-    // attacker-supplied. That client trusts only the system roots, never the test CA, and
-    // reaches 127.0.0.1 only with the process-wide private-endpoint opt-in, and then also
-    // over plain `http://`. So the network is served twice: over TLS at `url`, which every
-    // call the tests make uses, and over plain HTTP at `status_url`. That becomes its
-    // `base_url`, so the status lists it issues point there.
-    vta_sdk::http::set_allow_private_endpoints(true);
+    // The network serves its status lists over TLS on 127.0.0.1, under the test CA.
+    tls::trust_for_foreign_fetches();
     let dir = tempfile::tempdir().unwrap();
     let operator = Identity::generate();
     let (listener, url) = tls::bind().await;
-    let plain = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let status_url = format!("http://{}", plain.local_addr().unwrap());
     let config = Config {
         listen: "127.0.0.1:0".into(),
-        base_url: status_url,
+        base_url: url.clone(),
         data_dir: dir.path().to_path_buf(),
         admins: vec![operator.did().to_string()],
         resolver_url: None,
@@ -117,8 +109,6 @@ async fn network_with(visibility: Visibility, relayed: Option<Arc<SessionRegistr
         syncer = Some(s);
     }
     let app = vtn_service::routes::router(state);
-    let plain_app = app.clone();
-    tokio::spawn(async move { axum::serve(plain, plain_app).await.unwrap() });
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Net {
         _dir: dir,

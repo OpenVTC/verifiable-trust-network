@@ -133,9 +133,9 @@ async fn live_with(
     visibility: Visibility,
     rooms: Vec<vtn_service::rooms::RoomDef>,
 ) -> Live {
-    // Before the network builds its clients, which read this when they are made: the status
-    // lists these tests serve are on loopback (see `status_server`).
-    vta_sdk::http::set_allow_private_endpoints(true);
+    // A network checks status lists (its peers', a community's) served over TLS on
+    // 127.0.0.1 under the test CA.
+    tls::trust_for_foreign_fetches();
     let (listener, url) = tls::bind().await;
     let dir = tempfile::tempdir().unwrap();
     let ca = dir.path().join("test-ca.pem");
@@ -529,14 +529,8 @@ async fn a_network_can_repudiate_a_parent_listing() {
 }
 
 /// A community serving its own status list, to check a person's credential against.
-///
-/// Over plain `http://` on loopback, not TLS: a network fetches a status list with
-/// vta-sdk's hardened client, which trusts only the system roots (never the test CA),
-/// and admits an exact loopback host over `http://` once private endpoints are allowed.
 async fn status_server(community: &Identity, revoked: &[u32]) -> String {
-    vta_sdk::http::set_allow_private_endpoints(true);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, url) = tls::bind().await;
     let mut bits = Bitstring::default();
     for i in revoked {
         bits.set(*i, true).unwrap();
