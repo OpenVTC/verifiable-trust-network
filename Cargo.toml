@@ -43,7 +43,10 @@ affinidi-data-integrity = "0.8"
 vti-common = { version = "0.67", features = ["host-session"] }
 vti-secrets = "0.40"
 vta-sdk = { version = "0.91", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
-affinidi-did-resolver-cache-sdk = { version = "0.8.53", features = ["network"] }
+# `did-webs` stated here, not only inherited from vti-vtn's `resolve` feature: a network
+# built against vti-vtn 0.8 had no did:webs resolver and refused every did:webs community
+# with "no resolver registered for DID method 'webs'".
+affinidi-did-resolver-cache-sdk = { version = "0.8.53", features = ["network", "did-webs"] }
 
 anyhow = "1"
 axum = "0.8"
