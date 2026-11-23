@@ -4309,7 +4309,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "trql-client",
- "trust-tasks-rs 0.39.0",
+ "trust-tasks-rs 0.40.5",
  "uuid",
  "vta-sdk",
  "vti-specs-vtn",
@@ -6812,6 +6812,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "trust-tasks-rs"
+version = "0.40.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "888b0aacc25030e446a268651463d8a33488686925e03e16f99dd091e8554c4c"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "regress 0.12.0",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "trust-tasks-tsp"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7498,7 +7513,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs 0.39.0",
+ "trust-tasks-rs 0.40.5",
  "uuid",
  "vta-sdk",
  "vti-common",
