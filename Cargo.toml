@@ -24,29 +24,28 @@ type_complexity = "allow"
 [workspace.dependencies]
 # The VTN protocol, shared with the VTC: model, credentials, verification, groups, relay,
 # rooms, and (feature `client`) the `vtn/*` Trust Task client.
-vti-vtn = { version = "0.14", features = ["client", "resolve"] }
+vti-vtn = { version = "0.15", features = ["client", "resolve"] }
 # The receive side of the `vtn/*` Trust Tasks (`POST /v1/trust-tasks`), shared with the VTC.
-vti-trust-task-server = "0.13"
+vti-trust-task-server = "0.14"
 # The generated `vtn/*` 0.1 payload and response types, and their schema index.
-vti-specs-vtn = "0.3"
+vti-specs-vtn = "0.4"
 # `vtc/networks/deliver`: how this network delivers a broadcast to a member community.
-vti-specs-vtc = "0.7"
+vti-specs-vtc = "0.8"
 # `auth/oob/*` wallet sign-in for the landing page, shared with the VTC.
-vti-oob-server = "0.12"
-vti-specs-core = "0.6"
-trust-tasks-rs = { version = "0.39.0", default-features = false }
+vti-oob-server = "0.13"
+vti-specs-core = "0.7"
+trust-tasks-rs = { version = "0.41.0", default-features = false }
 async-trait = "0.1"
 
-dtg-credentials = "0.14"
-affinidi-secrets-resolver = "0.5.18"
-affinidi-data-integrity = "0.8"
-vti-common = { version = "0.67", features = ["host-session"] }
-vti-secrets = "0.40"
-vta-sdk = { version = "0.91", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
+dtg-credentials = "0.15"
+affinidi-secrets-resolver = "0.6"
+vti-common = { version = "0.68", features = ["host-session"] }
+vti-secrets = "0.41"
+vta-sdk = { version = "0.92", features = ["provision-client", "proof-verify", "didcomm", "tsp"] }
 # `did-webs` stated here, not only inherited from vti-vtn's `resolve` feature: a network
 # built against vti-vtn 0.8 had no did:webs resolver and refused every did:webs community
 # with "no resolver registered for DID method 'webs'".
-affinidi-did-resolver-cache-sdk = { version = "0.8.53", features = ["network", "did-webs"] }
+affinidi-did-resolver-cache-sdk = { version = "0.9", features = ["network", "did-webs"] }
 
 anyhow = "1"
 axum = "0.8"
