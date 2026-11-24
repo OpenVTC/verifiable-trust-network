@@ -573,6 +573,7 @@ async fn member_credentials_are_checked_against_the_communitys_status_list() {
             let person = Identity::generate();
             let mut vmc = dtg_credentials::DTGCredential::new_vmc(
                 msf.did().to_string(),
+                dtg_credentials::IssuerScope::Public,
                 person.did().to_string(),
                 Utc::now() - Duration::seconds(5),
                 Some(Utc::now() + Duration::days(1)),
@@ -885,6 +886,7 @@ async fn group_vmc(group: &Identity, person: &Identity) -> Value {
 async fn community_vmc(issuer: &Identity, person: &Identity) -> Value {
     let mut vmc = dtg_credentials::DTGCredential::new_vmc(
         issuer.did().to_string(),
+        dtg_credentials::IssuerScope::Public,
         person.did().to_string(),
         Utc::now() - Duration::seconds(5),
         Some(Utc::now() + Duration::days(1)),
