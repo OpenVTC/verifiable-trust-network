@@ -669,6 +669,7 @@ async fn join(net: &TestNetwork, party: &Identity, kind: &str, label: &str, extr
 async fn community_vmc(community: &Identity, person: &Identity) -> Value {
     let mut vmc = dtg_credentials::DTGCredential::new_vmc(
         community.did().to_string(),
+        dtg_credentials::IssuerScope::Public,
         person.did().to_string(),
         Utc::now() - Duration::seconds(5),
         Some(Utc::now() + Duration::days(1)),
