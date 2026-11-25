@@ -427,9 +427,9 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "trust-tasks-build 0.2.2",
+ "trust-tasks-build",
  "trust-tasks-proof",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -4309,7 +4309,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "trql-client",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "vti-specs-vtn",
@@ -6344,6 +6344,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -6647,9 +6648,9 @@ dependencies = [
 
 [[package]]
 name = "trql-client"
-version = "0.31.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daa9c0797f0fb87fc89b734ae0ce7daf9276abd1e052b51521438c6e4b4a1798"
+checksum = "e6797d6a1aa59c6a6c1a8526a9663f3b533be4cccc5b2cdde0fc08666b852967"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6657,29 +6658,11 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
- "trust-tasks-build 0.1.4",
- "trust-tasks-rs 0.37.15",
-]
-
-[[package]]
-name = "trust-tasks-build"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4bc4ea9eed5eeee38822e3efa03da008fb0da38d15e49648d9b25862ac2fcdc"
-dependencies = [
- "anyhow",
- "heck",
- "prettyplease",
- "proc-macro2",
- "quote",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "syn 2.0.119",
- "toml",
- "typify",
+ "trust-tasks-build",
+ "trust-tasks-rs",
+ "uuid",
 ]
 
 [[package]]
@@ -6712,7 +6695,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -6728,7 +6711,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -6747,7 +6730,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tower",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -6768,22 +6751,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "trust-tasks-rs 0.41.2",
-]
-
-[[package]]
-name = "trust-tasks-rs"
-version = "0.37.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "702ad3e50fb73403bffc7291d7b2439cfe34d6debf5a55aecd0912995c588f10"
-dependencies = [
- "async-trait",
- "chrono",
- "regress 0.11.1",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.21",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -6813,7 +6781,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7219,7 +7187,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "trust-tasks-tsp",
  "url",
  "uuid",
@@ -7285,7 +7253,7 @@ dependencies = [
  "tracing",
  "trust-tasks-capability-client",
  "trust-tasks-didcomm",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "zeroize",
@@ -7309,7 +7277,7 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "tracing",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "url",
  "vti-common",
  "vti-specs-core",
@@ -7354,7 +7322,7 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea9b2c93c9bd5f7d2a0c655870568b031af888f5ccbbb01fb633bcd1c3ce4716"
 dependencies = [
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "vti-specs-core",
  "vti-specs-rooms",
  "vti-specs-vta",
@@ -7368,8 +7336,8 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac30280fbe07ba52168efff5333a0569cd5e35e0ce2ee586148a5cf8ddd7465e"
 dependencies = [
- "trust-tasks-build 0.2.2",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7378,8 +7346,8 @@ version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d23dc0fc9a551a82928008ca52d74a872181089bc9a10019ff9241640fb8429a"
 dependencies = [
- "trust-tasks-build 0.2.2",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7388,8 +7356,8 @@ version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5faf57c1a367618985662e99adaccde43fc954598d250f5fb64e0a5a818ac01d"
 dependencies = [
- "trust-tasks-build 0.2.2",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7398,8 +7366,8 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa7be798f65c1cc2c2f4ec9eef16a0cb434b843b515b1be2064ae11160920407"
 dependencies = [
- "trust-tasks-build 0.2.2",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7408,8 +7376,8 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d03d98520b19cf9f19c1314deb57489172f70206936afca9652e39152c3cd731"
 dependencies = [
- "trust-tasks-build 0.2.2",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-build",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -7427,7 +7395,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trust-tasks-https",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "vti-common",
@@ -7454,7 +7422,7 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "vti-specs-vtn",
@@ -7488,7 +7456,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs 0.41.2",
+ "trust-tasks-rs",
  "uuid",
  "vta-sdk",
  "vti-common",
